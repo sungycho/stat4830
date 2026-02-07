@@ -234,3 +234,9 @@ CLAUDE.md
 environments/**/outputs/
 
 STAT4830_Project_Scoping_Meeting_Prep_Styled.pdf
+
+self-critique.md
+
+notebooks/outputs/**
+
+environments/**/.prime/

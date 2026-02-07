@@ -1,86 +1,183 @@
 # Project Report
 
-Team: Sung Cho, Maxwell DeLorenzo, Gyubin Han
+**Team:** Sung Cho, Maxwell DeLorenzo, Gyubin Han
 
 ## 1. Problem Statement
 
 ### What are you optimizing?
 
-We are optimizing hyperparameter tuning processes for evolutionary strategies (ES) applied to reinforcement learning tasks with large language models (LLMs). Specifically, we aim to develop effective and replicable tuning procedures for zeroth-order optimization methods that can efficiently train LLMs on different RL environments.
+We study optimization and tuning strategies for zeroth-order reinforcement learning (RL) methods applied to large language models (LLMs). Concretely, we aim to understand how policy gradient (PG) methods and evolutionary strategies (ES) behave when applied to LLM-driven RL environments, under realistic constraints on observability, memory, and controllability.
+
+Rather than directly optimizing model weights, we initially focus on prompt-level policies (e.g., selecting or weighting prompt modules) as a controllable policy space compatible with black-box evaluation environments.
 
 ### Why does this problem matter?
 
-Conventional policy gradient reinforcement learning methods require substantial memory resources, particularly when training large models. Evolutionary strategies offer a promising alternative with significantly improved memory efficiency, as they do not require storing gradients or maintaining a replay buffer. However, tuning LLMs using zeroth-order optimization methods presents unique challenges compared to first-order methods, making effective hyperparameter selection critical for achieving competitive performance.
+Many modern RL environments for LLMs, including hosted or agent-based platforms, do not expose gradients, intermediate states, or step-level rewards. In such settings:
+
+- First-order methods are difficult or impossible to apply directly.
+- Zeroth-order methods (e.g., ES) become attractive alternatives.
+- Even policy gradient methods must often be reformulated over non-standard policy spaces (e.g., prompts rather than weights).
+
+Understanding how these optimization methods behave under constrained, black-box evaluation pipelines is therefore crucial for practical post-training and agent optimization of LLMs.
+
+**Why Wordle + Prime Intellect?**
+
+We choose Wordle-style environments hosted via Prime Intellect for three reasons:
+
+1. **Black-box reward structure:** rewards are computed externally via Prime's evaluator, closely matching real-world post-training settings.
+2. **Sequential decision-making with sparse feedback:** Wordle highlights credit assignment challenges common in LLM-based RL.
+3. **Infrastructure realism:** Prime Intellect reflects the tooling and constraints encountered in modern LLM research platforms.
+
+Because Prime environments do not expose model internals or gradients, this setting naturally motivates zeroth-order optimization and prompt-based control.
+
+**Why prompt policies instead of weight policies?**
+
+In the Prime Intellect + Wordle setting:
+
+- Direct weight updates are not supported in local evaluation mode.
+- The environment operates through text-based interaction and rubric-level rewards.
+- Prompt structure is one of the few controllable and reproducible knobs.
+
+As a result, we define policies over prompt modules (e.g., formatting constraints, tracking instructions, information-gain heuristics). This choice allows us to:
+
+- Implement both PG and ES in a comparable way,
+- Control the policy space explicitly,
+- Remain faithful to the black-box nature of the environment.
+
+Whether prompt policies are sufficient or merely a proxy for weight-level learning is an open question we plan to revisit.
 
 ### How will you measure success?
 
-We will evaluate success using three primary metrics: (1) model accuracy on the target task (e.g., Wordle solving performance), (2) training time required to reach convergence, and (3) peak memory usage during training. Ideally, we would achieve comparable or better accuracy than policy gradient baselines while significantly reducing memory consumption.
+At this stage, success is defined by:
 
-### What are your constraints?
+- **Correctness:** PG and ES updates produce non-trivial policy changes and non-zero rewards.
+- **Comparability:** PG and ES can be evaluated under matched evaluation budgets.
+- **Qualitative optimization behavior:** differences in variance, stability, and sample efficiency are observable.
 
-Our primary constraints include limited training time and a fixed compute budget. Additionally, we must ensure that experiments are reproducible and that all comparisons are made under equivalent computational and environmental conditions.
+Later stages will focus more heavily on performance metrics (e.g., success rate, convergence trends).
+
+### Constraints
+
+- Fixed evaluation budget (Prime CLI calls are expensive).
+- No access to gradients, environment internals, or step-level rewards.
+- Linux-only Prime tooling (requiring WSL on Windows).
+- Practical time constraints for debugging and experimentation.
 
 ### What data do you need?
 
-We will primarily use environments provided by Prime Intellect, which enable on-the-fly data generation for training and evaluation. Specifically, we will begin by generating baseline comparison data by training an open-weight LLM (e.g., Qwen) using policy gradient methods to solve Wordle, measuring both accuracy and memory usage to establish performance benchmarks.
+We rely entirely on on-the-fly interaction data generated through Prime Intellect’s evaluation environments. Each training signal consists of complete episode trajectories and scalar rewards returned by the Prime evaluator, without access to intermediate states or gradients.
 
 ### What could go wrong?
 
-Key risks include inconsistent experimental conditions across runs, which could invalidate comparisons. We must ensure that all experiments adhere to the same constraints, use identical model architectures, and maintain consistent evaluation protocols. Additionally, the stochastic nature of evolutionary strategies may require multiple runs to obtain reliable performance estimates.
+Because rewards are sparse, delayed, and externally computed, optimization signals may be noisy or misleading at small scales. Additionally, prompt-level policies may fail to capture deeper model behaviors, limiting the interpretability and generalizability of observed optimization dynamics.
+
 
 ## 2. Technical Approach
 
-### Mathematical formulation (objective function, constraints)
+### Objective formulation
 
-The optimization problem can be formulated as maximizing the expected reward over policy parameters $\theta$:
+We consider the standard RL objective:
 
-$$
-\max_{\theta} \mathbb{E}_{\tau \sim \pi_{\theta}} [R(\tau)]
-$$
+$$\max_{\theta} \mathbb{E}_{\tau \sim \pi_{\theta}} [R(\tau)],$$
 
-where $R(\tau)$ is the cumulative reward for trajectory $\tau$. Evolutionary strategies approximate the gradient using finite differences:
+where $R(\tau)$ is the scalar reward returned by the Prime evaluator for a full episode (trajectory).
 
-$$
-\nabla_{\theta} \mathbb{E}[R] \approx \frac{1}{\sigma^2} \mathbb{E}_{\epsilon \sim \mathcal{N}(0,I)} [\epsilon \cdot R(\theta + \sigma\epsilon)]
-$$
+Crucially, $R(\tau)$ is:
 
-where $\sigma$ is the perturbation scale and $\epsilon$ is a random perturbation vector. The key hyperparameters to optimize include the perturbation scale $\sigma$, population size $N$, learning rate $\alpha$, and potentially covariance matrix adaptation parameters. Constraints include memory budget $M_{\text{max}}$ and total compute budget $C_{\text{max}}$.
+- Sparse
+- Delayed
+- Externally computed
 
-### Algorithm/approach choice and justification
+This motivates optimization methods that rely only on function evaluations, not gradients.
 
-We will explore several evolutionary strategy variants, including Natural Evolution Strategies (NES) and potentially CMA-ES for covariance adaptation. NES is chosen for its simplicity and effectiveness in high-dimensional spaces, while CMA-ES offers adaptive covariance estimation that can improve convergence. The zeroth-order nature of these methods eliminates the need for backpropagation through the environment, significantly reducing memory requirements compared to policy gradient methods. We will implement a hyperparameter search strategy (e.g., grid search or Bayesian optimization) to systematically explore the hyperparameter space.
+### Policy Gradient (REINFORCE)
 
-### PyTorch implementation strategy
+For PG, we define a Bernoulli policy over prompt modules:
 
-Our PyTorch implementation will leverage parameter perturbation techniques where we sample perturbations $\epsilon_i \sim \mathcal{N}(0,I)$ and evaluate policies at $\theta + \sigma\epsilon_i$. We will use PyTorch's parameter cloning and manipulation capabilities to efficiently generate perturbed parameter sets without requiring gradient computation. The fitness evaluation will involve forward passes through the LLM policy network on sampled trajectories. We will implement batched evaluations where possible to maximize GPU utilization while respecting memory constraints. The optimization update will follow:
+$$a \sim \pi_{\theta}(a), \quad a \in \{0,1\}^K$$
 
-$$
-\theta \leftarrow \theta + \alpha \cdot \frac{1}{N} \sum_{i} (\epsilon_i \cdot R_i)
-$$
+and update parameters using REINFORCE:
 
-where $R_i$ is the reward for perturbation $i$.
+$$\theta \leftarrow \theta + \alpha (R - b) \nabla_{\theta} \log \pi_{\theta}(a),$$
 
-### Validation methods
+where $b$ is a baseline to reduce variance.
 
-Validation will be performed through systematic comparison against policy gradient baselines (e.g., PPO or REINFORCE) on identical tasks and model architectures. We will use cross-validation across multiple random seeds to ensure statistical significance. Performance will be evaluated on held-out test sets, and we will track convergence curves to compare training efficiency. Memory profiling will be conducted using PyTorch's memory tracking utilities to measure peak memory consumption during training.
+Each PG update consists of multiple Prime evaluations corresponding to sampled prompt configurations.
 
-### Resource requirements and constraints
+### Evolutionary Strategies (ES)
 
-The implementation must operate within memory constraints suitable for training LLMs (targeting <50% of baseline policy gradient memory usage). We will utilize GPU resources efficiently through batched evaluations and careful management of parameter copies. The compute budget will be allocated across hyperparameter search iterations, with each iteration requiring $N$ forward passes (where $N$ is the population size) plus reward computation. We will implement checkpointing to enable resumption of long-running experiments and to manage compute budget effectively.
+For ES, we define continuous prompt parameters $\theta \in \mathbb{R}^K$ and apply Gaussian perturbations:
+
+$$\epsilon_i \sim \mathcal{N}(0, I), \quad R_i = R(\theta + \sigma \epsilon_i)$$
+
+with gradient estimate:
+
+$$\nabla_{\theta} J \approx \frac{1}{N} \sum_i (R_i - b) \epsilon_i.$$
+
+ES treats the entire evaluation pipeline as a black-box reward oracle, making it well-suited to Prime's interface.
+
+### Evaluation pipeline
+
+Both PG and ES use the same evaluation mechanism:
+
+1. `prime eval run` via CLI
+2. Results saved to disk
+3. Scalar rewards extracted from `results.json(l)`
+4. Aggregation performed externally
+
+This ensures methodological parity between PG and ES.
 
 ## 3. Initial Results
 
-- Evidence your implementation works
-- Basic performance metrics
-- Test case results
-- Current limitations
-- Resource usage measurements
-- Unexpected challenges
+At this stage, our results focus on system correctness and feasibility, rather than final performance.
+
+### Evidence the implementation works
+
+- Prime CLI evaluation successfully returns non-zero rewards.
+- Policy Gradient updates modify Bernoulli prompt logits.
+- Evolutionary Strategies produce non-trivial gradient estimates and parameter updates.
+- PG and ES can be run under matched evaluation budgets.
+
+### Engineering outcomes
+
+- A robust reward-extraction pipeline was implemented despite varying Prime output formats.
+- PG and ES share a common black-box evaluator interface.
+- Prompt-based policies provide a workable control surface under Prime's constraints.
+
+### Results interpretation
+
+Quantitative performance comparisons and plots will be added after notebook experiments are finalized.
 
 ## 4. Next Steps
 
-- Immediate improvements needed
-- Technical challenges to address
-- Questions you need help with
-- Alternative approaches to try
-- What you've learned so far
+### Immediate next steps
+
+- Run short PG vs ES experiments with matched evaluation budgets.
+- Plot reward trajectories and variance over update steps.
+- Compare qualitative optimization behavior.
+
+### Technical challenges encountered
+
+- Prime Intellect setup required Linux-only tooling; development was performed via WSL on Windows, introducing tooling limitations.
+- Prime evaluation outputs vary in directory structure and file formats, requiring non-trivial debugging.
+- TextArena/Wordle environments provide limited controllable knobs despite rich interaction dynamics.
+- Significant debugging effort was required to align evaluation artifacts with optimization loops.
+
+### Questions we need help with
+
+- Is prompt-level policy optimization an adequate proxy for studying LLM post-training dynamics?
+- How should evaluation budgets be normalized when comparing PG and ES?
+- To what extent do prompt policies capture meaningful optimization behavior compared to weight-level updates?
+
+### Limitations
+
+- We cannot afford large-scale or long-horizon training due to evaluation costs.
+- Model choice is constrained by API pricing and availability.
+- Hosted environments limit observability and direct control.
+- Infrastructure constraints (Linux-only tooling) complicate development workflows.
+
+### What we have learned so far
+
+- Zeroth-order methods integrate naturally with black-box LLM evaluation pipelines.
+- PG and ES behave qualitatively differently even in small-scale prompt-policy settings.
+- Engineering complexity is a central consideration in modern LLM RL research.

@@ -61,7 +61,7 @@ def run_es_step(
         for k in keys:
             grad[k] += adv * eps[k]
     for k in keys:
-        grad[k] /= float(cfg.population)
+        grad[k] /= float(cfg.population * cfg.sigma)
 
     # update
     new_weights = {k: theta.weights[k] + cfg.lr * grad[k] for k in keys}

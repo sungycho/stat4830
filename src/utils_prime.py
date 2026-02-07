@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+from typing import Optional
 
 
 # IMPORTANT:
@@ -42,39 +43,60 @@ def extract_reward_from_results(results_path: Path, is_jsonl: bool) -> float:
 
 
 def find_eval_root() -> Path:
-    candidates = [
-        Path.cwd() / "evals",
-        Path.cwd() / "prime_evals",
-        Path.cwd() / "environments" / "my_env" / "outputs" / "evals",
+    # Look for common eval output locations starting from the current
+    # working directory and walking up parent directories. This allows
+    # running notebooks from a subfolder (e.g., `notebooks/`) while
+    # still locating eval outputs saved at the repository root.
+    rel_candidates = [
+        Path("evals"),
+        Path("prime_evals"),
+        Path("environments") / "my_env" / "outputs" / "evals",
+    ]
+
+    cwd = Path.cwd()
+    for base in [cwd] + list(cwd.parents):
+        for rc in rel_candidates:
+            p = base / rc
+            if p.exists():
+                return p
+
+    # fallback to common home locations
+    home_candidates = [
         Path.home() / ".prime" / "evals",
         Path.home() / ".cache" / "prime" / "evals",
     ]
-    for p in candidates:
+    for p in home_candidates:
         if p.exists():
             return p
+
     raise RuntimeError("Could not locate Prime eval output directory")
 
 def find_latest_results_file(eval_root: Path, start_time: float) -> Path:
     """
-    Find the newest results.jsonl or results.json created AFTER start_time.
-    Works even if structure is eval_root/model_dir/run_id_dir/results.jsonl.
+    Find the newest results.jsonl or results.json under eval_root.
+    Prefers files created after start_time, but falls back to latest overall.
+    Safe for repeated calls in training loops.
     """
     candidates = []
 
-    # results.jsonl or results.json anywhere under eval_root
-    for p in eval_root.rglob("results.jsonl"):
-        if p.is_file() and p.stat().st_mtime > start_time:
-            candidates.append(p)
-
-    for p in eval_root.rglob("results.json"):
-        if p.is_file() and p.stat().st_mtime > start_time:
-            candidates.append(p)
+    for pattern in ("results.jsonl", "results.json"):
+        for p in eval_root.rglob(pattern):
+            if p.is_file():
+                candidates.append(p)
 
     if not candidates:
-        raise RuntimeError(f"No results.json(l) found under {eval_root} after start_time")
+        raise RuntimeError(f"No results.json(l) found under {eval_root}")
 
-    # newest file wins
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    # sort by modification time (newest last)
+    candidates.sort(key=lambda p: p.stat().st_mtime)
+
+    # 1) try: newest file AFTER start_time
+    for p in reversed(candidates):
+        if p.stat().st_mtime >= start_time:
+            return p
+
+    # 2) fallback: newest file overall
+    return candidates[-1]
 
 
 def prime_eval(
@@ -140,7 +162,7 @@ def prime_eval(
     eval_root = find_eval_root()
 
     # 🔥 find newest results file produced by THIS run
-    results_path = find_latest_results_file(eval_root, start_time)
+    results_path = find_latest_results_file(eval_root, start_time - 5.0)
     run_dir = results_path.parent  # this will be .../model_dir/<run_id>/
 
     is_jsonl = results_path.name.endswith(".jsonl")
