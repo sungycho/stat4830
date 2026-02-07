@@ -12,6 +12,7 @@ dependencies = [
     "accelerate>=0.20.0",
     "matplotlib>=3.5.0",
     "jupyter>=1.0.0",
+    "ipykernel>=7.1.0",
 ]
 
 [build-system]

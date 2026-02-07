@@ -3441,6 +3441,7 @@ version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "ipykernel" },
     { name = "jupyter" },
     { name = "matplotlib" },
     { name = "nltk" },
@@ -3453,6 +3454,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=0.20.0" },
+    { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.0.0" },
     { name = "matplotlib", specifier = ">=3.5.0" },
     { name = "nltk", specifier = ">=3.9.2" },

@@ -1,8 +1,10 @@
 # Project Report
 
+Team: Sung Cho, Maxwell DeLorenzo, Gyubin Han
+
 ## 1. Problem Statement
 
-### What are you optimizing? (Be specific)
+### What are you optimizing?
 
 We are optimizing hyperparameter tuning processes for evolutionary strategies (ES) applied to reinforcement learning tasks with large language models (LLMs). Specifically, we aim to develop effective and replicable tuning procedures for zeroth-order optimization methods that can efficiently train LLMs on different RL environments.
 
