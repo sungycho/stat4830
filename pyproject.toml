@@ -14,6 +14,9 @@ dependencies = [
     "jupyter>=1.0.0",
     "ipykernel>=7.1.0",
     "gymnasium>=1.2.3",
+    "prime>=0.5.40",
+    "ray>=2.0",
+    "mujoco>=3.5.0",
 ]
 
 [build-system]
