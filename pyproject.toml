@@ -1,6 +1,6 @@
 [project]
-name = "wordle"
-description = "Wordle game environment"
+name = "stat4830"
+description = "Stat4830 reinforcement learning research codebase"
 tags = ["textarena", "multi-turn", "reasoning", "game", "train", "eval"]
 version = "0.1.7"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
     "prime>=0.5.40",
     "ray>=2.0",
     "mujoco>=3.5.0",
+    "numpy>=2.4.2",
 ]
 
 [build-system]
