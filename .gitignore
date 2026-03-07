@@ -250,3 +250,5 @@ results/notebook/lqr_scaling/lqr_scaling_v4_state_dim=16_action_dim=4_name=vanil
 results/notebook/protocol/best_configs.json
 
 week6_deliverable_instructions.md
+
+results/*

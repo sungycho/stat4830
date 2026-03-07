@@ -1,5 +1,6 @@
 [project]
 name = "stat4830"
+requires-python = ">=3.11"
 description = "Stat4830 reinforcement learning research codebase"
 tags = ["textarena", "multi-turn", "reasoning", "game", "train", "eval"]
 version = "0.1.7"
@@ -18,6 +19,8 @@ dependencies = [
     "ray>=2.0",
     "mujoco>=3.5.0",
     "numpy>=2.4.2",
+    "datasets>=2.0.0",
+    "pytest>=7.0.0",
 ]
 
 [build-system]

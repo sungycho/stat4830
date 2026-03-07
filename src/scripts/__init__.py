@@ -1,1 +1,1 @@
-"""Utility scripts."""
+"""Sanity-check scripts."""

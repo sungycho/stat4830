@@ -39,7 +39,7 @@ import ray
 from src.envs.base import rollout, eval_policy
 from src.methods.ars import _build_eval_env_if_needed
 from src.methods.base import MethodResult
-from src.policy import LinearPolicy, RunningNorm
+from src.core.policy import LinearPolicy, RunningNorm
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,9 @@
+from __future__ import annotations
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Backend(Protocol):
+    def generate(self, prompt: str) -> str: ...
+    def generate_batch(self, prompts: list[str]) -> list[str]: ...
+    def sync_weights(self, model) -> None: ...

@@ -19,7 +19,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.analysis import (
+from src.analysis.analysis import (
     compute_seed_stats,
     compute_percentile_stats,
     load_runs_from_dir,

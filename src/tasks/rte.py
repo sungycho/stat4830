@@ -1,0 +1,43 @@
+from __future__ import annotations
+import re
+from datasets import load_dataset
+from src.tasks import Task, register
+
+_YES = re.compile(r"\byes\b", re.IGNORECASE)
+_NO = re.compile(r"\bno\b", re.IGNORECASE)
+
+# RTE labels: 0 = entailment (yes), 1 = not_entailment (no)
+
+
+@register("rte")
+class RteTask(Task):
+    def load_data(self, train_size, val_size, seed):
+        ds = load_dataset("glue", "rte")
+        train = ds["train"].shuffle(seed=seed).select(range(min(train_size, len(ds["train"]))))
+        val_pool = ds["validation"]
+        val = val_pool.shuffle(seed=seed).select(range(min(val_size, len(val_pool))))
+        return _to_list(train), _to_list(val)
+
+    def build_prompt(self, example):
+        return (
+            f'Premise: "{example["sentence1"]}"\n'
+            f'Hypothesis: "{example["sentence2"]}"\n'
+            f"Does the hypothesis follow from the premise? Answer yes or no:"
+        )
+
+    def score(self, text, example):
+        yes = _YES.search(text)
+        no = _NO.search(text)
+        if yes and no:
+            pred = 0 if yes.start() < no.start() else 1
+        elif yes:
+            pred = 0  # entailment
+        elif no:
+            pred = 1  # not_entailment
+        else:
+            return -1.0
+        return 1.0 if pred == example["label"] else -1.0
+
+
+def _to_list(split):
+    return [dict(ex) for ex in split]

@@ -31,9 +31,9 @@ import json
 from itertools import product
 from pathlib import Path
 
-from src.config import ExperimentConfig, EnvConfig, MethodConfig
-from src.runner import run_single
-from src.analysis import episodes_to_threshold
+from src.core.config import ExperimentConfig, EnvConfig, MethodConfig
+from src.experiments.runner import run_single
+from src.analysis.analysis import episodes_to_threshold
 
 
 # ---------------------------------------------------------------------------

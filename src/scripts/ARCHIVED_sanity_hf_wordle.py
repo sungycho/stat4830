@@ -17,11 +17,11 @@ def set_seeds(seed: int):
 
 
 def main():
-    seed = 0
+    seed = 42
     set_seeds(seed)
 
     # Start tiny + fast
-    model_name = os.environ.get("MODEL_NAME", "distilgpt2")
+    model_name = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct")
 
     backend = HFBackend(
         model_name=model_name,
@@ -31,7 +31,12 @@ def main():
     )
 
     # Replace this prompt with your actual Wordle policy prompt template
-    prompt = "You are playing Wordle. Reply with one 5-letter guess only."
+    prompt = (
+        "You are playing a one-turn Wordle-style game.\n"
+        "Return exactly one 5-letter guess in square brackets.\n"
+        "Required format: [xxxxx]\n"
+        "Use lowercase letters only and output no extra text."
+    )
 
     # 1) Basic generation
     text1 = backend.generate(prompt)

@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from src.config import ExperimentConfig, SweepConfig
+from src.core.config import ExperimentConfig, SweepConfig
 from src.envs.lqr import LQREnv
 from src.envs.pendulum import PendulumEnv
 from src.methods.ars import run_ars

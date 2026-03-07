@@ -6,7 +6,7 @@ import numpy as np
 
 from src.envs.base import rollout, eval_policy
 from src.methods.base import MethodResult
-from src.policy import LinearPolicy, RunningNorm
+from src.core.policy import LinearPolicy, RunningNorm
 
 
 def _make_policy_fn(W_flat, env, running_norm):

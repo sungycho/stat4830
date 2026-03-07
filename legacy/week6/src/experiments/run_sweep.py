@@ -15,8 +15,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.config import ExperimentConfig, EnvConfig, MethodConfig, SweepConfig
-from src.runner import run_sweep, run_multi_seed
+from src.core.config import ExperimentConfig, EnvConfig, MethodConfig, SweepConfig
+from src.experiments.runner import run_sweep, run_multi_seed
 
 
 def _base_config(budget: int, seeds: list[int] | None = None) -> ExperimentConfig:
