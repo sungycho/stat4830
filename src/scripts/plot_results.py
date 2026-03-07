@@ -137,7 +137,10 @@ def plot_block(exp_dir: Path, out_path: Path, title: str | None = None) -> None:
 
 
 def plot_calibration_heatmap(exp_dir: Path, out_path: Path) -> None:
-    """Special plot for calibration block: heatmap of best_val over sigma × lr grid."""
+    """Special plot for calibration block: heatmap of best_val over sigma × lr grid.
+
+    Cell text is "mean±std" when std exists (n_seeds >= 2), else just mean.
+    """
     summary_path = exp_dir / "summary.json"
     if not summary_path.exists():
         print(f"[warn] No summary.json in {exp_dir}, skipping heatmap")
@@ -152,7 +155,8 @@ def plot_calibration_heatmap(exp_dir: Path, out_path: Path) -> None:
     if not sigma_vals or not lr_vals:
         return
 
-    grid = np.full((len(sigma_vals), len(lr_vals)), float("nan"))
+    mean_grid = np.full((len(sigma_vals), len(lr_vals)), float("nan"))
+    std_grid = np.full((len(sigma_vals), len(lr_vals)), float("nan"))
     for r in results:
         cfg = r.get("config", {})
         if "sigma" not in cfg or "lr" not in cfg:
@@ -160,10 +164,12 @@ def plot_calibration_heatmap(exp_dir: Path, out_path: Path) -> None:
         i = sigma_vals.index(cfg["sigma"])
         j = lr_vals.index(cfg["lr"])
         if r.get("mean_best_val") is not None:
-            grid[i, j] = r["mean_best_val"]
+            mean_grid[i, j] = r["mean_best_val"]
+        if r.get("std_best_val") is not None:
+            std_grid[i, j] = r["std_best_val"]
 
     fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(grid, cmap="YlOrRd", vmin=0, vmax=1, aspect="auto")
+    im = ax.imshow(mean_grid, cmap="YlOrRd", vmin=0, vmax=1, aspect="auto")
     fig.colorbar(im, ax=ax, label="Mean best val_acc")
     ax.set_xticks(range(len(lr_vals)))
     ax.set_xticklabels([f"{v:.0e}" for v in lr_vals])
@@ -175,8 +181,14 @@ def plot_calibration_heatmap(exp_dir: Path, out_path: Path) -> None:
 
     for i in range(len(sigma_vals)):
         for j in range(len(lr_vals)):
-            v = grid[i, j]
-            text = f"{v:.3f}" if not np.isnan(v) else "N/A"
+            mv = mean_grid[i, j]
+            sv = std_grid[i, j]
+            if np.isnan(mv):
+                text = "N/A"
+            elif np.isnan(sv):
+                text = f"{mv:.3f}"
+            else:
+                text = f"{mv:.3f}\n±{sv:.3f}"
             ax.text(j, i, text, ha="center", va="center", fontsize=8)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

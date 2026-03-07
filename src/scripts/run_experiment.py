@@ -73,8 +73,8 @@ BLOCKS: dict[str, dict] = {
         "variants": [
             {"sigma": s, "lr": a}
             for s, a in product(
-                [1e-4, 3e-4, 1e-3],
-                [1e-3, 3e-3, 1e-2],
+                [3e-4, 1e-3, 3e-3, 1e-2],
+                [1e-4, 3e-4, 1e-3, 3e-3],
             )
         ],
     },
@@ -239,15 +239,21 @@ def run_block(
 
         valid = [v for v in best_per_seed if v is not None]
         mean_best = sum(valid) / len(valid) if valid else None
+        std_best = None
+        if len(valid) >= 2:
+            var = sum((v - mean_best) ** 2 for v in valid) / len(valid)
+            std_best = math.sqrt(var)
         results.append({
             "block": block_name,
             "variant": slug,
             "config": {k: v for k, v in variant.items() if k != "label"},
             "best_per_seed": best_per_seed,
             "mean_best_val": mean_best,
+            "std_best_val": std_best,
             "run_dir": str(per_variant_dir),
         })
-        print(f"  [{slug}] mean_best_val={mean_best}")
+        std_str = f"{std_best:.4f}" if std_best is not None else "N/A"
+        print(f"  [{slug}] mean_best_val={mean_best} std_best_val={std_str}")
 
     return results
 
@@ -263,8 +269,9 @@ def print_block_summary(results: list[dict]) -> None:
     print("=" * 60)
     for rank, r in enumerate(results_sorted, 1):
         mv = f"{r['mean_best_val']:.4f}" if r["mean_best_val"] is not None else "N/A"
+        sv = f"{r['std_best_val']:.4f}" if r.get("std_best_val") is not None else "N/A"
         seeds_str = [f"{v:.3f}" if v is not None else "N/A" for v in r["best_per_seed"]]
-        print(f"  {rank}. {r['variant']:<20} mean={mv}  seeds={seeds_str}")
+        print(f"  {rank}. {r['variant']:<20} mean={mv} std={sv}  seeds={seeds_str}")
     print("=" * 60)
 
 
