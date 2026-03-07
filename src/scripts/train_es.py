@@ -74,6 +74,15 @@ def parse_args():
                    help="Path to a checkpoint (.pt) to load weights from before training")
     p.add_argument("--perturb-verbose",  action="store_true", default=False,
                    help="Print per-layer progress during perturbation (default off on GPU)")
+    # ES variant flags
+    p.add_argument("--noise-type",       default="gaussian", choices=["gaussian", "rademacher"],
+                   help="Perturbation noise distribution")
+    p.add_argument("--one-sided",        action="store_true", default=False,
+                   help="One-sided ES: only eval +eps (no antithetic -eps pair)")
+    p.add_argument("--no-normalize",     action="store_true", default=False,
+                   help="Disable z-score reward normalisation in gradient update")
+    p.add_argument("--top-k",            type=int,   default=0,
+                   help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
     return p.parse_args()
 
 
@@ -132,26 +141,39 @@ def validate(backend, val_data: list[dict], task, batch_size: int = 16) -> float
     return correct / len(val_data)
 
 
-def run_es_iteration(model, backend, task, train_data, args) -> tuple[list[int], list[float]]:
+def run_es_iteration(
+    model, backend, task, train_data, args
+) -> tuple[list[int], list[float], int]:
+    """Run one ES iteration. Returns (seeds, advantages, fwd_passes_used)."""
     effective_batch = min(args.batch_size, len(train_data))
     if effective_batch < args.batch_size:
         print(f"[warn] batch_size={args.batch_size} > train_size={len(train_data)}, clamped to {effective_batch}")
     batch = random.sample(train_data, effective_batch)
     seeds, advantages = [], []
+    fwd_passes = 0
 
+    nt = args.noise_type
     for _ in range(args.population_size):
         seed = random.randint(0, 2**31)
 
-        perturb_inplace(model, seed, args.sigma, sign=+1)        # θ → θ+σε
+        perturb_inplace(model, seed, args.sigma, sign=+1, noise_type=nt)  # θ → θ+σε
         r_plus = eval_batch(backend, batch, task)
-        perturb_inplace(model, seed, 2 * args.sigma, sign=-1)    # θ+σε → θ-σε
-        r_minus = eval_batch(backend, batch, task)
-        restore_inplace(model, seed, args.sigma, sign=-1)         # θ-σε → θ
+        fwd_passes += effective_batch
+
+        if args.one_sided:
+            restore_inplace(model, seed, args.sigma, sign=+1, noise_type=nt)  # θ+σε → θ
+            adv = r_plus
+        else:
+            perturb_inplace(model, seed, 2 * args.sigma, sign=-1, noise_type=nt)  # θ+σε → θ-σε
+            r_minus = eval_batch(backend, batch, task)
+            fwd_passes += effective_batch
+            restore_inplace(model, seed, args.sigma, sign=-1, noise_type=nt)    # θ-σε → θ
+            adv = r_plus - r_minus
 
         seeds.append(seed)
-        advantages.append(r_plus - r_minus)
+        advantages.append(adv)
 
-    return seeds, advantages
+    return seeds, advantages, fwd_passes
 
 
 def main() -> None:
@@ -166,10 +188,18 @@ def main() -> None:
         raise SystemExit(f"[error] --device {args.device} requested but CUDA is not available on this machine.")
 
     dtype = _resolve_dtype(args.dtype, args.device)
+    normalize = not args.no_normalize
+
+    # Preflight: top-k=1 with normalization → z-score undefined after filtering
+    if args.top_k == 1 and normalize:
+        raise SystemExit(
+            "[error] --top-k 1 with normalization requires N≥2 after filtering. "
+            "Use --top-k 2 or add --no-normalize."
+        )
 
     run_dir = make_run_dir(args)
     log_path = run_dir / "log.jsonl"
-    log_entry(log_path, {"event": "config", **vars(args), "resolved_dtype": dtype})
+    log_entry(log_path, {"event": "config", **vars(args), "resolved_dtype": dtype, "normalize": normalize})
     print(f"Run dir: {run_dir}")
 
     t_start = time.perf_counter()
@@ -202,6 +232,8 @@ def main() -> None:
         f"Device: {args.device}  |  Dtype: {dtype}\n"
         f"pop={args.population_size}  iters={args.num_iters}  batch={args.batch_size}  "
         f"sigma={args.sigma}  lr={args.lr}\n"
+        f"noise={args.noise_type}  one_sided={args.one_sided}  "
+        f"normalize={normalize}  top_k={args.top_k}\n"
         f"train={len(train_data)}  val={len(val_data)}"
     )
 
@@ -211,14 +243,30 @@ def main() -> None:
 
     best_val_acc = run_state.get("best_val_acc", baseline_acc)
     start_iter = run_state.get("iteration", 0)
-    save_checkpoint(backend.model, run_dir / "best.pt", {"iteration": start_iter, "best_val_acc": best_val_acc})
+    # train_fwd: forward passes spent on training perturbations only (the controlled budget).
+    # total_fwd: train_fwd + validation passes (informational; not used as x-axis).
+    cumulative_train_fwd = run_state.get("cumulative_train_fwd", 0)
+    cumulative_total_fwd = run_state.get("cumulative_total_fwd", 0)
+    save_checkpoint(backend.model, run_dir / "best.pt", {
+        "iteration": start_iter, "best_val_acc": best_val_acc,
+        "cumulative_train_fwd": cumulative_train_fwd,
+        "cumulative_total_fwd": cumulative_total_fwd,
+    })
 
     for iteration in range(args.num_iters):
         t_iter = time.perf_counter()
 
-        seeds, advantages = run_es_iteration(backend.model, backend, task, train_data, args)
-        es_grad_update(backend.model, seeds, advantages, lr=args.lr)
+        seeds, advantages, iter_fwd = run_es_iteration(backend.model, backend, task, train_data, args)
+        es_grad_update(
+            backend.model, seeds, advantages,
+            lr=args.lr,
+            top_k=args.top_k,
+            normalize=normalize,
+            noise_type=args.noise_type,
+        )
 
+        cumulative_train_fwd += iter_fwd
+        cumulative_total_fwd += iter_fwd
         iter_time = time.perf_counter() - t_iter
         mean_adv = sum(advantages) / len(advantages)
 
@@ -228,28 +276,41 @@ def main() -> None:
             "mean_adv": mean_adv,
             "advantages": advantages,
             "iter_time": iter_time,
+            "iter_fwd": iter_fwd,
+            "train_fwd": cumulative_train_fwd,   # x-axis for plots (budget-controlled)
+            "total_fwd": cumulative_total_fwd,   # includes val overhead
         }
 
         print(
             f"iter {iteration + 1}/{args.num_iters} | "
             f"mean_adv={mean_adv:+.4f} | "
             f"advantages={[f'{a:+.3f}' for a in advantages]} | "
-            f"iter_time={iter_time:.1f}s"
+            f"train_fwd={cumulative_train_fwd} | iter_time={iter_time:.1f}s"
         )
 
-        current_state = {"iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc}
+        current_state = {
+            "iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc,
+            "cumulative_train_fwd": cumulative_train_fwd,
+            "cumulative_total_fwd": cumulative_total_fwd,
+        }
         save_checkpoint(backend.model, run_dir / "latest.pt", current_state)
 
         if (iteration + 1) % args.val_every == 0:
             val_acc = validate(backend, val_data, task, batch_size=args.batch_size)
+            cumulative_total_fwd += len(val_data)  # val cost charged to total only
             entry["val_acc"] = val_acc
+            entry["total_fwd"] = cumulative_total_fwd  # update total after val
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                save_checkpoint(backend.model, run_dir / "best.pt", {"iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc})
-                print(f"  >> val_acc={val_acc:.3f} — new best, checkpoint saved")
+                save_checkpoint(backend.model, run_dir / "best.pt", {
+                    "iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc,
+                    "cumulative_train_fwd": cumulative_train_fwd,
+                    "cumulative_total_fwd": cumulative_total_fwd,
+                })
+                print(f"  >> val_acc={val_acc:.3f} — new best | train_fwd={cumulative_train_fwd}")
             else:
-                print(f"  >> val_acc={val_acc:.3f} (best={best_val_acc:.3f})")
+                print(f"  >> val_acc={val_acc:.3f} (best={best_val_acc:.3f}) | train_fwd={cumulative_train_fwd}")
 
             if args.early_stop_delta > 0 and val_acc < best_val_acc - args.early_stop_delta:
                 log_entry(log_path, entry)

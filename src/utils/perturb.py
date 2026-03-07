@@ -50,7 +50,24 @@ def _make_rng(params: list, seed: int) -> torch.Generator:
     return rng
 
 
-def perturb_inplace(model, seed: int, sigma: float, sign: int) -> None:
+def _sample_noise(p, rng: torch.Generator, noise_type: str) -> torch.Tensor:
+    """Sample noise for a single parameter tensor."""
+    if noise_type == "rademacher":
+        # ±1 uniform random (Rademacher distribution)
+        return (
+            torch.empty(p.shape, device=p.device)
+            .bernoulli_(0.5, generator=rng)
+            .mul_(2)
+            .sub_(1)
+            .to(p.dtype)
+        )
+    # default: Gaussian
+    return torch.randn(p.shape, generator=rng, device=p.device, dtype=p.dtype)
+
+
+def perturb_inplace(
+    model, seed: int, sigma: float, sign: int, noise_type: str = "gaussian"
+) -> None:
     """Perturb model parameters in-place, layer by layer.
 
     A single RNG stream is created from `seed` on the model's device and
@@ -58,10 +75,11 @@ def perturb_inplace(model, seed: int, sigma: float, sign: int) -> None:
     noise while the full perturbation remains fully determined by `seed`.
 
     Args:
-        model: the PyTorch model to perturb.
-        seed:  RNG seed that fully determines the noise realisation.
-        sigma: perturbation scale.
-        sign:  +1 for positive perturbation, -1 for antithetic.
+        model:      the PyTorch model to perturb.
+        seed:       RNG seed that fully determines the noise realisation.
+        sigma:      perturbation scale.
+        sign:       +1 for positive perturbation, -1 for antithetic.
+        noise_type: "gaussian" (default) or "rademacher" (±1 uniform).
     """
     params = _es_params(model)
     rng = _make_rng(params, seed)
@@ -69,11 +87,11 @@ def perturb_inplace(model, seed: int, sigma: float, sign: int) -> None:
     phase = "+eps" if sign > 0 else "-eps"
 
     if VERBOSE:
-        print(f"[perturb] start phase={phase} seed={seed} sigma={sigma} layers={total}")
+        print(f"[perturb] start phase={phase} seed={seed} sigma={sigma} noise={noise_type} layers={total}")
 
     with torch.no_grad():
         for i, p in enumerate(params, start=1):
-            noise = torch.randn(p.shape, generator=rng, device=p.device, dtype=p.dtype)
+            noise = _sample_noise(p, rng, noise_type)
             p.add_(noise, alpha=sign * sigma)
             if VERBOSE and (i % 100 == 0 or i == total):
                 print(f"[perturb] {phase} layer {i}/{total} shape={tuple(p.shape)}")
@@ -82,9 +100,11 @@ def perturb_inplace(model, seed: int, sigma: float, sign: int) -> None:
         print(f"[perturb] done phase={phase}")
 
 
-def restore_inplace(model, seed: int, sigma: float, sign: int) -> None:
+def restore_inplace(
+    model, seed: int, sigma: float, sign: int, noise_type: str = "gaussian"
+) -> None:
     """Restore parameters perturbed by perturb_inplace — exact inverse."""
-    perturb_inplace(model, seed, sigma, -sign)
+    perturb_inplace(model, seed, sigma, -sign, noise_type=noise_type)
 
 
 def es_grad_update(
@@ -92,33 +112,51 @@ def es_grad_update(
     seeds: list[int],
     rewards: list[float],
     lr: float,
+    top_k: int = 0,
+    normalize: bool = True,
+    noise_type: str = "gaussian",
 ) -> None:
     """Apply the ES gradient update in-place, layer by layer (paper §3.2 points 6+7).
 
-    Uses z-score normalised rewards (point 4). sigma is digested into lr (point 7),
-    so it does not appear here — set lr = alpha / sigma at the call site.
     Peak extra memory = size of the largest single layer (one noise buffer at a time).
 
     Args:
-        model:   model whose parameters will be updated.
-        seeds:   list of perturbation seeds used in this iteration.
-        rewards: corresponding scalar rewards (one per seed).
-        lr:      effective learning rate (= alpha / sigma, pre-digested).
+        model:      model whose parameters will be updated.
+        seeds:      list of perturbation seeds used in this iteration.
+        rewards:    corresponding scalar rewards (one per seed).
+        lr:         effective learning rate.
+        top_k:      ARS-style: keep only the top-k seeds by |reward| before updating.
+                    0 = disabled (use all seeds).
+        normalize:  if True (default), z-score normalise rewards before update.
+        noise_type: "gaussian" or "rademacher" — must match what perturb_inplace used.
     """
     N = len(seeds)
-    if N == 1:
-        raise ValueError("es_grad_update requires at least 2 seeds; z-score is undefined for N=1.")
     r = torch.tensor(rewards, dtype=torch.float32)
-    std = r.std()  # Bessel-corrected, defined for N≥2
-    r_norm = (r - r.mean()) / (std + 1e-8)  # z-score normalisation
+
+    # ARS-style top-k selection by absolute advantage
+    if top_k > 0 and top_k < N:
+        indices = torch.argsort(torch.abs(r), descending=True)[:top_k]
+        seeds = [seeds[i] for i in indices.tolist()]
+        r = r[indices]
+        N = len(seeds)
+
+    if normalize:
+        if N < 2:
+            raise ValueError(
+                "es_grad_update with normalize=True requires at least 2 seeds; "
+                "z-score is undefined for N=1."
+            )
+        std = r.std()  # Bessel-corrected, defined for N≥2
+        r_norm = (r - r.mean()) / (std + 1e-8)
+    else:
+        r_norm = r
 
     params = _es_params(model)
     # Outer loop over seeds so each seed's RNG stream is advanced in the same
     # layer order as perturb_inplace, guaranteeing identical noise reconstruction.
-    # Contributions are applied directly — no full-model delta buffer needed.
     with torch.no_grad():
         for seed, rn in zip(seeds, r_norm.tolist()):
             rng = _make_rng(params, seed)
             for p in params:
-                noise = torch.randn(p.shape, generator=rng, device=p.device, dtype=p.dtype)
+                noise = _sample_noise(p, rng, noise_type)
                 p.add_(noise, alpha=rn * lr / N)
