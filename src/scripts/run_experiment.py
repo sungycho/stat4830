@@ -113,11 +113,12 @@ BLOCKS: dict[str, dict] = {
         ],
     },
     "pop_scaling": {
-        "description": "Population size N ∈ {4,8,16,32} at fixed forward-pass budget",
+        "description": "Population size N ∈ {1,4,8,16,32} at fixed forward-pass budget",
         "base_overrides": {},
         "variants": [
-            {"population_size": n, "num_iters": _pop_iters(n), "label": f"N{n}"}
-            for n in [4, 8, 16, 32]
+            {"population_size": 1, "num_iters": _pop_iters(1), "no_normalize": True, "label": "N1"},
+            *[{"population_size": n, "num_iters": _pop_iters(n), "label": f"N{n}"}
+              for n in [4, 8, 16, 32]],
         ],
     },
     "task_confirm": {

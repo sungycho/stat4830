@@ -252,3 +252,9 @@ results/notebook/protocol/best_configs.json
 week6_deliverable_instructions.md
 
 results/*
+
+.papers/
+
+.personal/
+
+!slides/*.pdf
