@@ -1,22 +1,16 @@
-# STAT 4830 Project: Reproducing Augmented Random Search (Mania et al., NeurIPS 2018)
+# STAT 4830 Project: Evolution Strategies for Black-Box LLM Fine-Tuning
 
-This repository reproduces the core experimental findings of **"Simple random search of static linear policies is competitive for reinforcement learning"** (Mania, Guy, Recht, NeurIPS 2018) and benchmarks ARS against Vanilla ES and REINFORCE on continuous-control environments.
+This repository studies **Evolution Strategies (ES)** as a gradient-free method for fine-tuning large language models. The core question: *which ES algorithmic choices matter most when optimizing LLMs with only scalar reward feedback?*
 
----
-
-## Project Overview
-
-The paper's central claim is that Augmented Random Search (ARS) — a simple derivative-free method using antithetic perturbations, reward normalization, and optional state normalization — matches or exceeds state-of-the-art deep RL on MuJoCo locomotion tasks. This project:
-
-1. Implements all five ARS variants (BRS, V1, V1-t, V2, V2-t) from the paper
-2. Benchmarks against Vanilla ES and REINFORCE under matched episode budgets
-3. Runs the paper's two-phase evaluation protocol (hyperparameter grid search → multi-seed evaluation)
-4. Conducts sensitivity analyses over σ, α, and N
-5. Studies scaling behavior across LQR problem dimensions (4 → 256)
+The project evolved in two phases:
+1. **Weeks 4–6:** Reproduced ARS (Mania et al., NeurIPS 2018) on classic control tasks (LQR, Pendulum), benchmarked against Vanilla ES and REINFORCE
+2. **Weeks 8–9:** Pivoted to black-box LLM fine-tuning — applied ES to OPT-350M on NLP classification tasks (RTE, BoolQ) with a systematic ablation framework
 
 ---
 
-## Key Results (LQR + Pendulum, budget=3200)
+## Key Results
+
+### Phase 1 — Classic Control (LQR + Pendulum)
 
 | Method | LQR final return | Pendulum final return |
 |--------|----------------:|-----------------------:|
@@ -26,7 +20,20 @@ The paper's central claim is that Augmented Random Search (ARS) — a simple der
 
 - ARS converges ~10,800× better than baselines on LQR
 - Reward normalization alone (BRS → V1) accounts for a 14,600× improvement
-- ARS degrades polynomially with dimension; ES/PG degrade exponentially (see `results/figures/lqr_scaling/`)
+
+### Phase 2 — LLM Fine-Tuning (OPT-350M on BoolQ)
+
+Calibrated HPs: σ=3e-4, α=1e-3 (from 4×4 grid search on RTE, 5 seeds)
+
+| Ablation | Finding |
+|---|---|
+| **Normalization** | Most impactful — z-score normalization converges to 0.62 vs 0.54 unnormalized, with far lower variance |
+| **Top-k selection** | top-k=4 (out of N=16) is unstable and degrades over time; top-k=8 is safe |
+| **One-sided vs two-sided** | No meaningful difference at matched forward-pass budget |
+| **Noise type** | Gaussian vs Rademacher converge to same accuracy; Rademacher slightly faster early |
+| **Population scaling** | Larger N is more stable; diminishing returns within fixed budget |
+
+Zero-shot baseline: 0.451 (RTE), ~0.62 achieved after ES fine-tuning (BoolQ)
 
 ---
 
@@ -38,60 +45,38 @@ uv sync
 source .venv/bin/activate
 ```
 
-To enable MuJoCo environments (optional):
-```bash
-uv add "gymnasium[mujoco]"
-```
+GPU required for LLM experiments (≥2GB VRAM for OPT-350M in bfloat16).
 
 ---
 
 ## Running Experiments
 
-### Sweep runner (LQR, Pendulum, sensitivity analyses)
+### Phase 1 — Classic Control
 
 ```bash
 # Full method comparison (ARS vs Vanilla ES vs REINFORCE)
 uv run python src/run_sweep.py --sweep full_comparison --budget 3200
 
-# ARS variant ablation (BRS, V1, V1-t, V2, V2-t)
+# ARS variant ablation
 uv run python src/run_sweep.py --sweep ars_variants --budget 1600
 
-# Hyperparameter sensitivity
-uv run python src/run_sweep.py --sweep sigma_sensitivity --budget 3200
-uv run python src/run_sweep.py --sweep alpha_sensitivity --budget 3200
-uv run python src/run_sweep.py --sweep N_sensitivity --budget 3200
-
-# Scaling study (LQR dim 4 → 256)
-uv run python src/run_sweep.py --sweep lqr_scaling --budget 3200
-
-# MuJoCo locomotion (requires gymnasium[mujoco])
-uv run python src/run_sweep.py --sweep mujoco_comparison --budget 50000
-```
-
-### Two-phase evaluation protocol (paper §4)
-
-```bash
-# Phase 1: hyperparameter grid search (3 seeds per config)
-uv run python src/sweep_protocol.py --phase grid \
-    --tasks lqr pendulum --variants V2-t --results-dir results/protocol
-
-# Phase 2: multi-seed evaluation with best config
-uv run python src/sweep_protocol.py --phase eval100 \
-    --best-configs results/protocol/best_configs.json \
-    --n-seeds 100 --results-dir results/protocol
-```
-
-### Visualize results
-
-```bash
+# Visualize
 uv run python src/visualize_all.py --results-dir results --out-dir results/figures
 ```
 
-### Notebook
+### Phase 2 — LLM Fine-Tuning
 
 ```bash
-uv run jupyter notebook
-# Open notebooks/ARS_Pendulum_Notebook.ipynb
+# Calibration grid search (run first)
+uv run python -m src.scripts.run_experiment --block calibration --device cuda --dtype bfloat16 --n-seeds 5 --out-dir results/exp_calibration
+
+# Ablation blocks (use calibrated HPs)
+uv run python -m src.scripts.run_experiment --block one_vs_two --device cuda --dtype bfloat16 --n-seeds 3 --best-sigma 3e-4 --best-lr 1e-3 --task boolq --out-dir results/exp_boolq
+
+# Available blocks: one_vs_two, noise_type, normalize, top_k, pop_scaling, task_confirm
+
+# Visualize all blocks
+uv run python -m src.scripts.plot_results --exp-dir results/exp_boolq --recursive
 ```
 
 ---
@@ -100,70 +85,33 @@ uv run jupyter notebook
 
 ```
 stat4830/
-├── src/                        # Core source code
-│   ├── config.py               # ExperimentConfig, EnvConfig, MethodConfig dataclasses
-│   ├── runner.py               # run_single(), run_sweep(), build_env(), build_method()
-│   ├── run_sweep.py            # CLI: predefined sweep configs
-│   ├── sweep_protocol.py       # Two-phase evaluation protocol (grid search → eval100)
-│   ├── analysis.py             # episodes_to_threshold(), compute_seed_stats()
-│   ├── visualize_all.py        # Plotting utilities for all sweep types
-│   ├── policy.py               # LinearPolicy, RunningNorm (Welford online estimator)
-│   ├── envs/
-│   │   ├── base.py             # rollout(), eval_policy(), FrozenNorm
-│   │   ├── lqr.py              # Linear Quadratic Regulator environment
-│   │   ├── pendulum.py         # Pendulum (Gymnasium wrapper)
-│   │   └── mujoco.py           # MuJoCo locomotion environments (optional)
-│   └── methods/
-│       ├── ars.py              # ARS: all variants (BRS, V1, V1-t, V2, V2-t)
-│       ├── ars_ray.py          # Ray-parallel ARS (noise table in object store)
-│       ├── vanilla_es.py       # Vanilla ES (one-sided perturbations)
-│       ├── reinforce.py        # REINFORCE with mean baseline
-│       └── base.py             # MethodResult dataclass
+├── src/
+│   ├── scripts/                    # LLM ES fine-tuning pipeline
+│   │   ├── train_es.py             # GPU-ready ES training loop
+│   │   ├── run_experiment.py       # Ablation block orchestrator
+│   │   ├── plot_results.py         # val_acc curves + calibration heatmap
+│   │   └── sanity_es_loop.py       # CPU-runnable reference implementation
+│   ├── utils/
+│   │   └── perturb.py              # Seed-based in-place perturbation (no stored noise)
+│   ├── backends/
+│   │   └── hf_backend.py           # HuggingFace batched inference
+│   ├── tasks/                      # RTE, BoolQ task registry
+│   ├── envs/                       # LQR, Pendulum environments (Phase 1)
+│   └── methods/                    # ARS, Vanilla ES, REINFORCE (Phase 1)
 ├── results/
-│   ├── figures/                # Generated plots (PNG)
-│   │   ├── full_comparison/
-│   │   ├── ars_variants/
-│   │   ├── lqr_scaling/
-│   │   ├── sigma_sensitivity/
-│   │   ├── alpha_sensitivity/
-│   │   └── N_sensitivity/
-│   └── notebook/               # Raw JSON result files (222 files)
-│       ├── full_comparison/
-│       ├── ars_variants/
-│       ├── lqr_scaling/
-│       ├── sigma_sensitivity/
-│       ├── alpha_sensitivity/
-│       ├── N_sensitivity/
-│       └── protocol/           # Grid search + eval100 outputs
+│   ├── exp_boolq/                  # BoolQ ablation results
+│   ├── exp_week9/                  # RTE ablation results
+│   └── week6-figures/              # Classic control plots
 ├── notebooks/
-│   └── ARS_Pendulum_Notebook.ipynb
-├── report.md                   # Week 6 report
-├── self-critique.md            # Week 6 self-critique
-├── pyproject.toml
-└── CLAUDE.md
+│   ├── week8_implementation.ipynb  # LLM ES walkthrough
+│   └── ARS_Pendulum_Notebook.ipynb # Phase 1 notebook
+└── .report/                        # Weekly reports and self-critiques
 ```
 
 ---
 
-## ARS Variants
+## Design Highlights
 
-| Variant | Reward norm | State norm | Top-b selection |
-|---------|:-----------:|:----------:|:---------------:|
-| BRS     | ✗           | ✗          | b = N           |
-| V1      | ✓           | ✗          | b = N           |
-| V1-t    | ✓           | ✗          | b < N           |
-| V2      | ✓           | ✓          | b = N           |
-| V2-t    | ✓           | ✓          | b < N           |
-
----
-
-## Ray Parallelism (optional)
-
-For MuJoCo tasks where per-episode cost is high (~50–200ms), Ray parallelizes N rollout pairs across CPU cores:
-
-```bash
-uv run python src/run_sweep.py --sweep mujoco_comparison --budget 50000 \
-    --use-ray --noise-table-size 1000000
-```
-
-Ray is not beneficial for LQR/Pendulum (episode cost ~1–5ms < Ray dispatch overhead).
+- **Seed-based in-place perturbation:** Noise reconstructed on-the-fly from integer seeds — no stored noise vectors, no model copies. Peak memory overhead = size of largest single layer (~50MB for OPT-350M)
+- **Budget-controlled comparison:** All ablation variants matched on training forward passes (not wall-clock time or iterations)
+- **Three-pass antithetic trick:** θ → θ+σε → θ−σε → θ in 3 parameter scans per seed vs 4 in the naive approach
