@@ -91,6 +91,24 @@ BLOCKS: dict[str, dict] = {
             {"top_k": 1, "no_normalize": True, "label": "top_k_1"},
         ],
     },
+    "top_k_n64": {
+        "description": (
+            "Top-k ablation at N=64: all_seeds / k=32 / k=16 / k=8 / k=1. "
+            "Fixed forward-pass budget matches other pop_scaling variants."
+        ),
+        "model": "facebook/opt-350m",
+        "base_overrides": {
+            "population_size": 64,
+            "num_iters": _pop_iters(64),   # 4 iters at N=64
+        },
+        "variants": [
+            {"top_k": 0,  "label": "all_seeds"},
+            {"top_k": 32, "label": "top_k_32"},
+            {"top_k": 16, "label": "top_k_16"},
+            {"top_k": 8,  "label": "top_k_8"},
+            {"top_k": 1,  "no_normalize": True, "label": "top_k_1"},
+        ],
+    },
     "top_k_no_norm": {
         "description": (
             "top_k=1 vs top_k=2 at N=8, both with no_normalize=True — "
