@@ -91,6 +91,21 @@ BLOCKS: dict[str, dict] = {
             {"top_k": 1, "no_normalize": True, "label": "top_k_1"},
         ],
     },
+    "top_k_no_norm": {
+        "description": (
+            "top_k=1 vs top_k=2 at N=8, both with no_normalize=True — "
+            "fair comparison removing the normalization confound."
+        ),
+        "model": "facebook/opt-350m",
+        "base_overrides": {
+            "population_size": 8,
+            "num_iters": _pop_iters(8),
+        },
+        "variants": [
+            {"top_k": 2, "no_normalize": True, "label": "top_k_2_nonorm"},
+            {"top_k": 1, "no_normalize": True, "label": "top_k_1_nonorm"},
+        ],
+    },
     "pop_scaling_1b": {
         "description": (
             "Population scaling N∈{1,2,4,8,16,32,64,128} on OPT-1.3B at fixed "
@@ -268,7 +283,7 @@ def parse_args():
     p.add_argument(
         "--block",
         required=True,
-        choices=list(BLOCKS.keys()),
+        choices=list(BLOCKS.keys()),  # top_k_n8 | top_k_no_norm | pop_scaling_1b
         help="Which experiment block to run",
     )
     p.add_argument(
