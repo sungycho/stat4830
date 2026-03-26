@@ -316,7 +316,8 @@ def parse_args():
     p.add_argument("--out-dir",  default=None,         help="Parent output dir (default: results/exp_<block>_<ts>)")
     p.add_argument("--device",   default=None,         help="Device override, e.g. cuda or cuda:0")
     p.add_argument("--dtype",    default=None,         help="Dtype override, e.g. bfloat16")
-    p.add_argument("--task",     default=None,         help="Task override (default: boolq)")
+    p.add_argument("--task",      default=None, help="Task override (default: boolq)")
+    p.add_argument("--num-iters", type=int, default=None, help="Override num_iters for all runs")
     return p.parse_args()
 
 
@@ -330,6 +331,8 @@ def main() -> None:
         extra_base["dtype"] = args.dtype
     if args.task:
         extra_base["task"] = args.task
+    if args.num_iters:
+        extra_base["num_iters"] = args.num_iters
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     parent_dir = (
