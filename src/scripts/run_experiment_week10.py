@@ -91,6 +91,17 @@ BLOCKS: dict[str, dict] = {
             {"top_k": 1, "no_normalize": True, "label": "top_k_1"},
         ],
     },
+    "pop_scaling_1b_large_n": {
+        "description": (
+            "Population scaling N∈{64,128} on OPT-1.3B — continuation after N=32 ran out of disk."
+        ),
+        "model": "facebook/opt-1.3b",
+        "base_overrides": {},
+        "variants": [
+            {"population_size": 64,  "num_iters": _pop_iters(64),  "label": "N64"},
+            {"population_size": 128, "num_iters": _pop_iters(128), "label": "N128"},
+        ],
+    },
     "top_k_n64": {
         "description": (
             "Top-k ablation at N=64: all_seeds / k=32 / k=16 / k=8 / k=1. "
