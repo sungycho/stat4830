@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+COMPAT_BINPATH = str(REPO_ROOT / "runtime_shims" / "bin")
 
 
 def _parse_csv_text(raw: str) -> list[str]:
@@ -23,9 +28,14 @@ def _parse_csv_ints(raw: str) -> list[int]:
 
 
 def _check_binaries(names: list[str]) -> list[str]:
+    search_path = (
+        f"{COMPAT_BINPATH}:{os.environ.get('PATH', '')}"
+        if os.environ.get("PATH", "")
+        else COMPAT_BINPATH
+    )
     missing: list[str] = []
     for name in names:
-        if shutil.which(name) is None:
+        if shutil.which(name, path=search_path) is None:
             missing.append(name)
     return missing
 
@@ -109,6 +119,73 @@ def _check_transformers_lozo_compat() -> tuple[bool, str]:
             "(runner compatibility shim will inject fallback)",
         )
     _ = find_pruneable_heads_and_indices
+    return (True, "")
+
+
+def _check_lozo_runtime_shim(repo_root: Path) -> tuple[bool, str]:
+    """Verify ``runtime_shims/sitecustomize`` backports LOZO import expectations."""
+    shim = str(repo_root / "runtime_shims")
+    code = (
+        "from transformers.optimization import AdamW; "
+        "from transformers.file_utils import is_torch_tpu_available; "
+        "from transformers.pytorch_utils import find_pruneable_heads_and_indices; "
+        "assert callable(AdamW); assert callable(is_torch_tpu_available)"
+    )
+    env = os.environ.copy()
+    prior = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{shim}:{prior}" if prior else shim
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except Exception as exc:  # pragma: no cover
+        return (False, f"{type(exc).__name__}: {exc}")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        return (
+            False,
+            err or "subprocess failed with no stderr/stdout",
+        )
+    return (True, "")
+
+
+def _check_lozo_src_resolution(
+    repo_root: Path,
+    medium_models_dir: Path,
+) -> tuple[bool, str]:
+    """Verify `import src.*` resolves to LOZO medium_models sources."""
+    compat = str(repo_root / "runtime_shims")
+    lozo_src_shim = str(repo_root / "runtime_shims" / "lozo_src")
+    env = os.environ.copy()
+    prior = env.get("PYTHONPATH", "")
+    prefix = f"{compat}:{lozo_src_shim}"
+    env["PYTHONPATH"] = f"{prefix}:{prior}" if prior else prefix
+    env["LOZO_MEDIUM_MODELS_DIR"] = str(medium_models_dir)
+    code = (
+        "import src.modeling_roberta as m; "
+        "print(getattr(m, '__file__', ''))"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(medium_models_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except Exception as exc:  # pragma: no cover
+        return (False, f"{type(exc).__name__}: {exc}")
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        return (
+            False,
+            err or "subprocess failed with no stderr/stdout",
+        )
     return (True, "")
 
 
@@ -210,6 +287,28 @@ def main() -> int:
                 )
             elif reason:
                 warnings.append(reason)
+            ok_shim, shim_err = _check_lozo_runtime_shim(REPO_ROOT)
+            if not ok_shim:
+                errors.append(
+                    "LOZO runtime compatibility shim check failed "
+                    f"(runtime_shims on PYTHONPATH): {shim_err}. "
+                    "Ensure repo contains runtime_shims/sitecustomize.py and "
+                    "run training via src.scripts.run_lozo_medium_suite "
+                    "(which prepends that path)."
+                )
+            elif medium_models_dir.exists():
+                ok_src, src_err = _check_lozo_src_resolution(
+                    REPO_ROOT,
+                    medium_models_dir,
+                )
+                if not ok_src:
+                    errors.append(
+                        "LOZO source import check failed "
+                        "(src.modeling_roberta unresolved): "
+                        f"{src_err}. "
+                        "This can happen when another installed `src` package "
+                        "shadows external/LOZO/medium_models/src."
+                    )
         except Exception:
             pass
 

@@ -9,6 +9,8 @@ dependencies = [
     "nltk>=3.9.2",
     "textarena==0.7.4",
     "torch>=2.0.0",
+    # LOZO upstream used 4.28.1; that release does not install on Python 3.12+.
+    # Stay on 4.x (<5) and use runtime_shims/sitecustomize.py for LOZO imports.
     "transformers>=4.30.0,<5.0.0",
     "accelerate>=0.20.0",
     "matplotlib>=3.5.0",

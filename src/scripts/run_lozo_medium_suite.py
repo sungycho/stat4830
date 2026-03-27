@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -18,10 +19,32 @@ DEFAULT_SEEDS = [13, 21, 42, 87, 100]
 DEFAULT_K_VALUES = [16, 512]
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPAT_PYTHONPATH = str(REPO_ROOT / "runtime_shims")
-DEBUG_LOG_PATH = Path(
-    "/Users/gyubin/Documents/Git/stat4830/.cursor/debug-a13946.log"
-)
+COMPAT_BINPATH = str(REPO_ROOT / "runtime_shims" / "bin")
+LOZO_SRC_SHIM_PATH = str(REPO_ROOT / "runtime_shims" / "lozo_src")
+BASH_ENV_SHIM = str(REPO_ROOT / "runtime_shims" / "bash_env_lozo.sh")
+LOZO_ENTRYPOINT_SH = str(REPO_ROOT / "runtime_shims" / "run_lozo_entrypoint.sh")
+DEBUG_LOG_PATH = REPO_ROOT / ".cursor" / "debug-a13946.log"
 DEBUG_SESSION_ID = "a13946"
+
+
+def _compat_bash_argv(script: str) -> list[str]:
+    """Run upstream shell with PYTHONPATH prepended inside the same shell.
+
+    ``sitecustomize`` should still load when ``runtime_shims`` is on
+    PYTHONPATH, but exporting here guarantees nested ``bash``/``python``
+    invocations see the compat path even if the parent environment was
+    stripped or reordered.
+    """
+    compat_q = shlex.quote(COMPAT_PYTHONPATH)
+    script_q = shlex.quote(script)
+    return [
+        "bash",
+        "-c",
+        'export PYTHONPATH='
+        + compat_q
+        + '"${PYTHONPATH:+:$PYTHONPATH}"'
+        + f"; exec bash {script_q}",
+    ]
 
 
 def _debug_log(
@@ -211,12 +234,15 @@ def _build_run_spec(
     if cfg.name == "lozo":
         env.update(
             {
-                "RANK": str(cfg.rank),
+                "LOZO_RANK": str(cfg.rank),
                 "STEP_INTERVAL": str(cfg.step_interval),
                 "LOZO_OPTIMIZER": cfg.lozo_optimizer,
                 "BETA1": _format_num(cfg.beta1),
             }
         )
+    command_script = cfg.script
+    if cfg.name == "lozo":
+        command_script = LOZO_ENTRYPOINT_SH
     return RunSpec(
         task=task,
         k=k,
@@ -226,7 +252,7 @@ def _build_run_spec(
         model_name=model_name,
         script=cfg.script,
         env=env,
-        command=["bash", cfg.script],
+        command=_compat_bash_argv(command_script),
         data_dir=str(
             medium_models_dir
             / "data"
@@ -279,7 +305,16 @@ def _resolve_lozo_sha(lozo_root: Path) -> str | None:
 
 def _assert_binaries() -> None:
     required = ["bash", "git", "jq"]
-    missing = [name for name in required if shutil.which(name) is None]
+    search_path = (
+        f"{COMPAT_BINPATH}:{os.environ.get('PATH', '')}"
+        if os.environ.get("PATH", "")
+        else COMPAT_BINPATH
+    )
+    missing = [
+        name
+        for name in required
+        if shutil.which(name, path=search_path) is None
+    ]
     if missing:
         raise EnvironmentError(
             "Missing required binaries: "
@@ -431,6 +466,20 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
             "Run `uv sync`, restart kernel, and rerun "
             "(compat shim is in runtime_shims/sitecustomize.py)."
         )
+    if (
+        "cannot import name 'AdamW'" in text
+        and "transformers.optimization" in text
+    ):
+        hints.append(
+            "Transformers optimizer API mismatch detected. "
+            "Compat shim should patch AdamW; ensure latest code is pulled "
+            "and kernel restarted."
+        )
+    if "Default process group has not been initialized" in text:
+        hints.append(
+            "Unexpected distributed mode detected (likely leaked rank env vars). "
+            "Runner should source runtime_shims/bash_env_lozo.sh before bash runs."
+        )
     if "No such file or directory" in text and "k-shot-1k-test" in text:
         hints.append(
             "Missing k-shot dataset directories; "
@@ -561,11 +610,19 @@ def _run_one(
 ) -> tuple[str, dict[str, Any]]:
     env = os.environ.copy()
     env.update(spec.env)
+    env["LOZO_MEDIUM_MODELS_DIR"] = str(medium_models_dir)
+    env["BASH_ENV"] = BASH_ENV_SHIM
+    existing_path = env.get("PATH", "")
+    env["PATH"] = (
+        f"{COMPAT_BINPATH}:{existing_path}"
+        if existing_path
+        else COMPAT_BINPATH
+    )
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
-        f"{COMPAT_PYTHONPATH}:{existing_pythonpath}"
+        f"{LOZO_SRC_SHIM_PATH}:{existing_pythonpath}"
         if existing_pythonpath
-        else COMPAT_PYTHONPATH
+        else LOZO_SRC_SHIM_PATH
     )
     run_id = (
         f"{spec.method}:{spec.task}:"
@@ -583,6 +640,9 @@ def _run_one(
             "command": spec.command,
             "resolved_python": resolved_python,
             "path_head": env.get("PATH", "").split(":")[:5],
+            "pythonpath": env.get("PYTHONPATH", ""),
+            "lozo_medium_models_dir": env.get("LOZO_MEDIUM_MODELS_DIR", ""),
+            "bash_env": env.get("BASH_ENV", ""),
         },
     )
     # endregion
