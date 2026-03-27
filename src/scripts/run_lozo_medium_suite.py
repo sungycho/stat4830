@@ -1,18 +1,14 @@
-"""Orchestrate LOZO medium-model MeZO/LOZO experiment suites.
-
-This runner is intentionally script-centric (week8 style): it builds a run
-matrix, executes upstream `medium_models/mezo.sh` and `medium_models/lozo.sh`,
-and records reproducibility artifacts in a local run root.
-"""
+"""Orchestrate LOZO medium-model suites with reproducibility guards."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +45,13 @@ def _safe_read_lines(path: Path) -> list[str]:
         return []
 
 
+def _tail_lines(path: Path, n: int) -> list[str]:
+    lines = _safe_read_lines(path)
+    if not lines:
+        return []
+    return lines[-n:]
+
+
 @dataclass(frozen=True)
 class MethodConfig:
     name: str
@@ -77,6 +80,7 @@ class RunSpec:
     script: str
     env: dict[str, str]
     command: list[str]
+    data_dir: str
     result_dir: str
     completion_glob: str
     log_path: str
@@ -111,7 +115,6 @@ def _lozo_tag(cfg: MethodConfig, k: int, model_name: str) -> str:
 
 
 def _completion_glob(task: str) -> str:
-    # upstream writes files like test_results_<task>.txt
     return f"test_results_{task}.txt"
 
 
@@ -122,7 +125,7 @@ def _expected_paths(
     seed: int,
     model_name: str,
     cfg: MethodConfig,
-) -> tuple[Path, str, str, Path]:
+) -> tuple[Path, Path]:
     if cfg.name == "mezo":
         gr_tag = _mezo_gr_tag(cfg, seed)
         tag = _mezo_tag(cfg, k, model_name)
@@ -138,9 +141,10 @@ def _expected_paths(
         / f"{task}-{model_name}-prompt-standard-{tag}-{gr_tag}"
         / f"{k}-{seed}"
     )
-    log_dir = medium_models_dir / "log_dir"
-    log_path = log_dir / f"{task}-{gr_tag}-{tag}.log"
-    return result_dir, gr_tag, tag, log_path
+    log_path = (
+        medium_models_dir / "log_dir" / f"{task}-{gr_tag}-{tag}.log"
+    )
+    return result_dir, log_path
 
 
 def _build_run_spec(
@@ -152,7 +156,7 @@ def _build_run_spec(
     model_name: str,
     cfg: MethodConfig,
 ) -> RunSpec:
-    result_dir, _, _, log_path = _expected_paths(
+    result_dir, log_path = _expected_paths(
         medium_models_dir=medium_models_dir,
         task=task,
         k=k,
@@ -160,7 +164,6 @@ def _build_run_spec(
         model_name=model_name,
         cfg=cfg,
     )
-
     env = {
         "TASK": task,
         "K": str(k),
@@ -184,7 +187,6 @@ def _build_run_spec(
                 "BETA1": _format_num(cfg.beta1),
             }
         )
-
     return RunSpec(
         task=task,
         k=k,
@@ -195,6 +197,9 @@ def _build_run_spec(
         script=cfg.script,
         env=env,
         command=["bash", cfg.script],
+        data_dir=str(
+            medium_models_dir / "data" / "k-shot-1k-test" / task / f"{k}-{seed}"
+        ),
         result_dir=str(result_dir),
         completion_glob=_completion_glob(task),
         log_path=str(log_path),
@@ -202,14 +207,12 @@ def _build_run_spec(
 
 
 def _is_completed(spec: RunSpec) -> bool:
-    result_dir = Path(spec.result_dir)
-    marker = result_dir / spec.completion_glob
+    marker = Path(spec.result_dir) / spec.completion_glob
     return marker.exists()
 
 
 def _extract_metrics(spec: RunSpec) -> dict[str, float]:
-    result_dir = Path(spec.result_dir)
-    marker = result_dir / spec.completion_glob
+    marker = Path(spec.result_dir) / spec.completion_glob
     metrics: dict[str, float] = {}
     for line in _safe_read_lines(marker):
         if "=" not in line:
@@ -225,6 +228,134 @@ def _extract_metrics(spec: RunSpec) -> dict[str, float]:
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
+
+
+def _resolve_lozo_sha(lozo_root: Path) -> str | None:
+    if not (lozo_root / ".git").exists():
+        return None
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(lozo_root), "rev-parse", "HEAD"],
+            text=True,
+        )
+        return out.strip()
+    except Exception:
+        return None
+
+
+def _assert_binaries() -> None:
+    required = ["bash", "git", "jq"]
+    missing = [name for name in required if shutil.which(name) is None]
+    if missing:
+        raise EnvironmentError(
+            "Missing required binaries: "
+            + ", ".join(missing)
+            + ". Install OS dependencies and retry."
+        )
+
+
+def _assert_medium_models_layout(medium_models_dir: Path) -> None:
+    required = [
+        medium_models_dir / "lozo.sh",
+        medium_models_dir / "mezo.sh",
+        medium_models_dir / "run_lozo.py",
+        medium_models_dir / "run_mezo.py",
+        medium_models_dir / "run_fewshot_lozo.sh",
+        medium_models_dir / "run_fewshot.sh",
+        medium_models_dir / "src" / "LOZOtrainer.py",
+        medium_models_dir / "src" / "trainer.py",
+        medium_models_dir / "src" / "modeling_roberta.py",
+    ]
+    missing = [p for p in required if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "LOZO medium_models layout is incomplete. Missing files:\n"
+            + "\n".join(f"  - {p}" for p in missing)
+        )
+
+
+def _assert_writable(path: Path, label: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if not os.access(path, os.W_OK):
+        raise PermissionError(f"{label} is not writable: {path}")
+
+
+def _validate_model_config(model: str, require_local_model: bool) -> None:
+    raw = model.strip()
+    if not raw:
+        raise ValueError("Model argument cannot be empty.")
+    model_path = Path(raw).expanduser()
+    if require_local_model and not model_path.exists():
+        raise FileNotFoundError(
+            "--require-local-model was set, but model path "
+            f"does not exist: {model_path}"
+        )
+
+
+def _validate_run_specs(
+    run_specs: list[RunSpec],
+    medium_models_dir: Path,
+    skip_data_check: bool,
+) -> None:
+    _assert_writable(medium_models_dir / "log_dir", "LOZO log directory")
+    _assert_writable(medium_models_dir / "result", "LOZO result directory")
+    if skip_data_check:
+        return
+    missing_data = [
+        Path(spec.data_dir)
+        for spec in run_specs
+        if not Path(spec.data_dir).exists()
+    ]
+    if missing_data:
+        examples = "\n".join(f"  - {p}" for p in missing_data[:10])
+        raise FileNotFoundError(
+            "Missing expected k-shot dataset directories. "
+            "Generate datasets first with LOZO tools.\n"
+            f"Examples:\n{examples}"
+        )
+
+
+def _gpu_memory_snapshot_mb() -> float | None:
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+        )
+    except Exception:
+        return None
+    vals: list[float] = []
+    for line in out.splitlines():
+        try:
+            vals.append(float(line.strip()))
+        except ValueError:
+            continue
+    if not vals:
+        return None
+    return max(vals)
+
+
+def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
+    hints: list[str] = []
+    text = "\n".join(log_tail)
+    if "ModuleNotFoundError: No module named 'loralib'" in text:
+        hints.append(
+            "Missing Python dependency `loralib`; run `uv sync` and retry."
+        )
+    if "No such file or directory" in text and "k-shot-1k-test" in text:
+        hints.append(
+            "Missing k-shot dataset directories; run LOZO data generation first."
+        )
+    if "CUDA out of memory" in text:
+        hints.append("CUDA OOM; lower batch size or use a smaller model.")
+    if return_code != 0 and not hints:
+        hints.append("Run failed; inspect `log_path` tail for traceback details.")
+    return hints
 
 
 def build_method_configs(args: argparse.Namespace) -> dict[str, MethodConfig]:
@@ -309,7 +440,6 @@ def build_run_matrix(
 
     methods = _parse_csv_text(args.methods)
     method_configs = build_method_configs(args)
-
     unknown = [m for m in methods if m not in method_configs]
     if unknown:
         raise ValueError(f"Unknown methods: {unknown}")
@@ -319,17 +449,17 @@ def build_run_matrix(
         for k in k_values:
             for seed in seeds:
                 for method in methods:
-                    spec = _build_run_spec(
-                        medium_models_dir=medium_models_dir,
-                        task=task,
-                        k=k,
-                        seed=seed,
-                        model=args.model,
-                        model_name=args.model_name,
-                        cfg=method_configs[method],
+                    run_specs.append(
+                        _build_run_spec(
+                            medium_models_dir=medium_models_dir,
+                            task=task,
+                            k=k,
+                            seed=seed,
+                            model=args.model,
+                            model_name=args.model_name,
+                            cfg=method_configs[method],
+                        )
                     )
-                    run_specs.append(spec)
-
     if args.max_runs is not None:
         run_specs = run_specs[: args.max_runs]
     return run_specs
@@ -339,10 +469,11 @@ def _run_one(
     spec: RunSpec,
     medium_models_dir: Path,
     dry_run: bool,
+    poll_gpu_memory_sec: float,
+    log_tail_lines: int,
 ) -> tuple[str, dict[str, Any]]:
     env = os.environ.copy()
     env.update(spec.env)
-
     started_at = time.time()
     payload: dict[str, Any] = {
         "task": spec.task,
@@ -352,40 +483,58 @@ def _run_one(
         "script": spec.script,
         "command": spec.command,
         "env": spec.env,
+        "data_dir": spec.data_dir,
         "result_dir": spec.result_dir,
         "log_path": spec.log_path,
         "started_at": started_at,
+        "gpu_memory_mb_before": _gpu_memory_snapshot_mb(),
     }
-
     if dry_run:
         payload["status"] = "dry_run"
         payload["finished_at"] = time.time()
         payload["elapsed_sec"] = payload["finished_at"] - started_at
         return "dry_run", payload
 
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         spec.command,
         cwd=medium_models_dir,
         env=env,
-        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+    peak_mem = payload["gpu_memory_mb_before"]
+    while proc.poll() is None:
+        snap = _gpu_memory_snapshot_mb()
+        if snap is not None:
+            peak_mem = snap if peak_mem is None else max(peak_mem, snap)
+        time.sleep(max(0.2, poll_gpu_memory_sec))
+
     payload["return_code"] = proc.returncode
     payload["finished_at"] = time.time()
     payload["elapsed_sec"] = payload["finished_at"] - started_at
+    payload["gpu_memory_mb_peak"] = peak_mem
+    payload["gpu_memory_mb_after"] = _gpu_memory_snapshot_mb()
+    log_tail = _tail_lines(Path(spec.log_path), log_tail_lines)
+    payload["log_tail"] = log_tail
+
     if proc.returncode == 0 and _is_completed(spec):
         payload["status"] = "completed"
         payload["metrics"] = _extract_metrics(spec)
         return "completed", payload
     if proc.returncode == 0 and not _is_completed(spec):
         payload["status"] = "no_marker"
+        payload["failure_hints"] = _infer_failure_hints(log_tail, proc.returncode)
         return "no_marker", payload
     payload["status"] = "failed"
+    payload["failure_hints"] = _infer_failure_hints(log_tail, proc.returncode)
     return "failed", payload
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Run LOZO medium-model suite in a reproducible, resumable way.",
+        description=(
+            "Run LOZO medium-model suite in a reproducible, resumable way."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
@@ -413,12 +562,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Cap number of runs",
     )
-
     p.add_argument("--model", default="roberta-large")
     p.add_argument("--model-name", default="roberta-large")
     p.add_argument("--weight-decay", type=float, default=0.0)
-
-    # Upstream medium_models defaults from README examples.
     p.add_argument("--mezo-bs", type=int, default=64)
     p.add_argument("--mezo-lr", type=float, default=1e-6)
     p.add_argument("--mezo-eps", type=float, default=1e-3)
@@ -429,13 +575,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lozo-step-interval", type=int, default=100)
     p.add_argument("--lozo-optimizer", default="sgd")
     p.add_argument("--lozo-beta1", type=float, default=0.9)
-
-    # Long/full and short/smoke schedules.
     p.add_argument("--full-steps", type=int, default=100000)
     p.add_argument("--full-eval-steps", type=int, default=10000)
     p.add_argument("--smoke-steps", type=int, default=1000)
     p.add_argument("--smoke-eval-steps", type=int, default=100)
-
     p.add_argument(
         "--force",
         action="store_true",
@@ -445,6 +588,36 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Write manifests without launching runs",
+    )
+    p.add_argument(
+        "--expected-lozo-ref",
+        default="",
+        help="If set, fail unless LOZO HEAD matches this commit hash.",
+    )
+    p.add_argument(
+        "--skip-data-check",
+        action="store_true",
+        help="Skip fail-fast checks for expected k-shot dataset directories.",
+    )
+    p.add_argument(
+        "--require-local-model",
+        action="store_true",
+        help="Require --model to resolve to an existing local path.",
+    )
+    p.add_argument(
+        "--poll-gpu-memory-sec",
+        type=float,
+        default=2.0,
+        help="Sampling interval in seconds for GPU memory snapshots.",
+    )
+    p.add_argument(
+        "--log-tail-lines",
+        type=int,
+        default=40,
+        help=(
+            "Attach this many trailing lines from upstream run log "
+            "to each record."
+        ),
     )
     return p.parse_args()
 
@@ -456,18 +629,36 @@ def main() -> None:
     run_root = Path(args.run_root).expanduser().resolve()
     run_root.mkdir(parents=True, exist_ok=True)
 
+    _assert_binaries()
+    _validate_model_config(args.model, args.require_local_model)
     if not medium_models_dir.exists():
         raise FileNotFoundError(
             f"Could not find medium_models at {medium_models_dir}. "
             "Clone LOZO first (e.g. git clone "
             "https://github.com/optsuite/LOZO external/LOZO)."
         )
+    _assert_medium_models_layout(medium_models_dir)
 
     run_specs = build_run_matrix(args, medium_models_dir)
+    _validate_run_specs(
+        run_specs=run_specs,
+        medium_models_dir=medium_models_dir,
+        skip_data_check=args.skip_data_check,
+    )
+
+    lozo_sha = _resolve_lozo_sha(lozo_root)
+    if args.expected_lozo_ref and lozo_sha != args.expected_lozo_ref:
+        raise RuntimeError(
+            "LOZO ref mismatch: "
+            f"expected {args.expected_lozo_ref}, got {lozo_sha or 'unknown'}"
+        )
+
     manifest = {
         "created_at": time.time(),
         "profile": args.profile,
         "lozo_root": str(lozo_root),
+        "lozo_sha": lozo_sha,
+        "expected_lozo_ref": args.expected_lozo_ref,
         "medium_models_dir": str(medium_models_dir),
         "run_root": str(run_root),
         "args": vars(args),
@@ -489,6 +680,8 @@ def main() -> None:
             f"[{idx:03d}/{len(run_specs):03d}] {spec.method} "
             f"task={spec.task} k={spec.k} seed={spec.seed}"
         )
+        print(f"  data_dir={spec.data_dir}")
+        print(f"  log_path={spec.log_path}")
         if _is_completed(spec) and not args.force:
             marker = Path(spec.result_dir) / spec.completion_glob
             print(f"  skip: completion marker present at {marker}")
@@ -500,6 +693,7 @@ def main() -> None:
                     "k": spec.k,
                     "seed": spec.seed,
                     "method": spec.method,
+                    "data_dir": spec.data_dir,
                     "result_dir": spec.result_dir,
                     "log_path": spec.log_path,
                     "metrics": _extract_metrics(spec),
@@ -511,15 +705,20 @@ def main() -> None:
             spec=spec,
             medium_models_dir=medium_models_dir,
             dry_run=args.dry_run,
+            poll_gpu_memory_sec=args.poll_gpu_memory_sec,
+            log_tail_lines=args.log_tail_lines,
         )
         counts[status] = counts.get(status, 0) + 1
         run_records.append(payload)
         rc = payload.get("return_code", "N/A")
         elapsed = payload.get("elapsed_sec", 0)
         print(f"  status={status} rc={rc} elapsed={elapsed:.1f}s")
+        for hint in payload.get("failure_hints", []):
+            print(f"  hint: {hint}")
 
     summary = {
         "completed_at": time.time(),
+        "lozo_sha": lozo_sha,
         "counts": counts,
         "num_runs": len(run_specs),
         "records": run_records,
