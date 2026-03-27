@@ -85,6 +85,11 @@ def _lozo_sha(lozo_root: Path) -> str | None:
         return None
 
 
+def _parse_major(version: str) -> int | None:
+    head = version.strip().split(".", 1)[0]
+    return int(head) if head.isdigit() else None
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Check LOZO medium-model prerequisites before running.",
@@ -151,6 +156,22 @@ def main() -> int:
             + ", ".join(missing_mods)
             + ". Run `uv sync` then retry."
         )
+    else:
+        try:
+            transformers_mod = importlib.import_module("transformers")
+            transformers_version = str(
+                getattr(transformers_mod, "__version__", "")
+            )
+            major = _parse_major(transformers_version)
+            if major is not None and major >= 5:
+                errors.append(
+                    "Incompatible transformers version detected: "
+                    f"{transformers_version}. "
+                    "LOZO medium code expects transformers<5. "
+                    "Run `uv sync` after pulling latest repo changes."
+                )
+        except Exception:
+            pass
 
     if shutil.which("nvidia-smi") is None:
         msg = "nvidia-smi not found. GPU memory plots may be unavailable."

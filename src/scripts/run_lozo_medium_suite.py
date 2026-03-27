@@ -16,6 +16,34 @@ from typing import Any
 DEFAULT_TASKS = ["SST-2", "sst-5", "SNLI", "MNLI", "RTE", "trec"]
 DEFAULT_SEEDS = [13, 21, 42, 87, 100]
 DEFAULT_K_VALUES = [16, 512]
+DEBUG_LOG_PATH = Path(
+    "/Users/gyubin/Documents/Git/stat4830/.cursor/debug-a13946.log"
+)
+DEBUG_SESSION_ID = "a13946"
+
+
+def _debug_log(
+    run_id: str,
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any],
+) -> None:
+    payload = {
+        "sessionId": DEBUG_SESSION_ID,
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        return
 
 
 def _stamp() -> str:
@@ -198,7 +226,11 @@ def _build_run_spec(
         env=env,
         command=["bash", cfg.script],
         data_dir=str(
-            medium_models_dir / "data" / "k-shot-1k-test" / task / f"{k}-{seed}"
+            medium_models_dir
+            / "data"
+            / "k-shot-1k-test"
+            / task
+            / f"{k}-{seed}"
         ),
         result_dir=str(result_dir),
         completion_glob=_completion_glob(task),
@@ -251,6 +283,28 @@ def _assert_binaries() -> None:
             "Missing required binaries: "
             + ", ".join(missing)
             + ". Install OS dependencies and retry."
+        )
+
+
+def _parse_major(version: str) -> int | None:
+    head = version.strip().split(".", 1)[0]
+    return int(head) if head.isdigit() else None
+
+
+def _assert_transformers_compat() -> None:
+    try:
+        import transformers  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise EnvironmentError(
+            "Could not import `transformers`; run `uv sync` and retry."
+        ) from exc
+    version = str(getattr(transformers, "__version__", ""))
+    major = _parse_major(version)
+    if major is not None and major >= 5:
+        raise EnvironmentError(
+            "Incompatible transformers version detected: "
+            f"{version}. LOZO medium requires transformers<5. "
+            "Run `uv sync` after pulling latest repo changes."
         )
 
 
@@ -347,14 +401,25 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
         hints.append(
             "Missing Python dependency `loralib`; run `uv sync` and retry."
         )
+    if (
+        "cannot import name 'find_pruneable_heads_and_indices'" in text
+        and "transformers.pytorch_utils" in text
+    ):
+        hints.append(
+            "Transformers major-version mismatch detected. "
+            "Run `uv sync` to install repo-pinned transformers<5."
+        )
     if "No such file or directory" in text and "k-shot-1k-test" in text:
         hints.append(
-            "Missing k-shot dataset directories; run LOZO data generation first."
+            "Missing k-shot dataset directories; "
+            "run LOZO data generation first."
         )
     if "CUDA out of memory" in text:
         hints.append("CUDA OOM; lower batch size or use a smaller model.")
     if return_code != 0 and not hints:
-        hints.append("Run failed; inspect `log_path` tail for traceback details.")
+        hints.append(
+            "Run failed; inspect `log_path` tail for traceback details."
+        )
     return hints
 
 
@@ -474,6 +539,25 @@ def _run_one(
 ) -> tuple[str, dict[str, Any]]:
     env = os.environ.copy()
     env.update(spec.env)
+    run_id = (
+        f"{spec.method}:{spec.task}:"
+        f"k{spec.k}:seed{spec.seed}:{int(time.time())}"
+    )
+    resolved_python = shutil.which("python", path=env.get("PATH"))
+    # region agent log
+    _debug_log(
+        run_id=run_id,
+        hypothesis_id="H5",
+        location="src/scripts/run_lozo_medium_suite.py:_run_one:pre_run",
+        message="Resolved python for upstream shell run",
+        data={
+            "cwd": str(medium_models_dir),
+            "command": spec.command,
+            "resolved_python": resolved_python,
+            "path_head": env.get("PATH", "").split(":")[:5],
+        },
+    )
+    # endregion
     started_at = time.time()
     payload: dict[str, Any] = {
         "task": spec.task,
@@ -516,6 +600,20 @@ def _run_one(
     payload["gpu_memory_mb_after"] = _gpu_memory_snapshot_mb()
     log_tail = _tail_lines(Path(spec.log_path), log_tail_lines)
     payload["log_tail"] = log_tail
+    # region agent log
+    _debug_log(
+        run_id=run_id,
+        hypothesis_id="H1_H2_H3_H4",
+        location="src/scripts/run_lozo_medium_suite.py:_run_one:post_run",
+        message="Upstream run completed",
+        data={
+            "return_code": proc.returncode,
+            "elapsed_sec": payload["elapsed_sec"],
+            "log_path": spec.log_path,
+            "log_tail": log_tail,
+        },
+    )
+    # endregion
 
     if proc.returncode == 0 and _is_completed(spec):
         payload["status"] = "completed"
@@ -523,7 +621,10 @@ def _run_one(
         return "completed", payload
     if proc.returncode == 0 and not _is_completed(spec):
         payload["status"] = "no_marker"
-        payload["failure_hints"] = _infer_failure_hints(log_tail, proc.returncode)
+        payload["failure_hints"] = _infer_failure_hints(
+            log_tail,
+            proc.returncode,
+        )
         return "no_marker", payload
     payload["status"] = "failed"
     payload["failure_hints"] = _infer_failure_hints(log_tail, proc.returncode)
@@ -628,8 +729,24 @@ def main() -> None:
     medium_models_dir = lozo_root / "medium_models"
     run_root = Path(args.run_root).expanduser().resolve()
     run_root.mkdir(parents=True, exist_ok=True)
+    # region agent log
+    _debug_log(
+        run_id=f"main:{int(time.time())}",
+        hypothesis_id="H1_H2_H3_H4_H5",
+        location="src/scripts/run_lozo_medium_suite.py:main:start",
+        message="Runner invoked",
+        data={
+            "profile": args.profile,
+            "methods": args.methods,
+            "model": args.model,
+            "lozo_root": args.lozo_root,
+            "skip_data_check": args.skip_data_check,
+        },
+    )
+    # endregion
 
     _assert_binaries()
+    _assert_transformers_compat()
     _validate_model_config(args.model, args.require_local_model)
     if not medium_models_dir.exists():
         raise FileNotFoundError(
@@ -715,6 +832,12 @@ def main() -> None:
         print(f"  status={status} rc={rc} elapsed={elapsed:.1f}s")
         for hint in payload.get("failure_hints", []):
             print(f"  hint: {hint}")
+        if status in {"failed", "no_marker"}:
+            tail = payload.get("log_tail", [])
+            if tail:
+                print("  log_tail:")
+                for line in tail[-12:]:
+                    print(f"    {line}")
 
     summary = {
         "completed_at": time.time(),
