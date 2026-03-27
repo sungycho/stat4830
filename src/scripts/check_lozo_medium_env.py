@@ -90,6 +90,28 @@ def _parse_major(version: str) -> int | None:
     return int(head) if head.isdigit() else None
 
 
+def _check_transformers_lozo_compat() -> tuple[bool, str]:
+    try:
+        from transformers import file_utils as _file_utils  # type: ignore
+        from transformers.pytorch_utils import (  # type: ignore
+            find_pruneable_heads_and_indices,
+        )
+        from transformers.utils import import_utils as _import_utils  # type: ignore
+    except Exception as exc:
+        return (False, f"{type(exc).__name__}: {exc}")
+    if (
+        not hasattr(_file_utils, "is_torch_tpu_available")
+        and not hasattr(_import_utils, "is_torch_tpu_available")
+    ):
+        return (
+            True,
+            "is_torch_tpu_available missing in transformers modules "
+            "(runner compatibility shim will inject fallback)",
+        )
+    _ = find_pruneable_heads_and_indices
+    return (True, "")
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Check LOZO medium-model prerequisites before running.",
@@ -179,6 +201,15 @@ def main() -> int:
                     "LOZO medium code expects transformers<5. "
                     "Run `uv sync` after pulling latest repo changes."
                 )
+            ok, reason = _check_transformers_lozo_compat()
+            if not ok:
+                errors.append(
+                    "Transformers LOZO compatibility check failed "
+                    f"(installed: {transformers_version}): {reason}. "
+                    "Run `uv sync` after pulling latest repo changes."
+                )
+            elif reason:
+                warnings.append(reason)
         except Exception:
             pass
 

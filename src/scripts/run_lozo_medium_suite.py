@@ -16,6 +16,8 @@ from typing import Any
 DEFAULT_TASKS = ["SST-2", "sst-5", "SNLI", "MNLI", "RTE", "trec"]
 DEFAULT_SEEDS = [13, 21, 42, 87, 100]
 DEFAULT_K_VALUES = [16, 512]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+COMPAT_PYTHONPATH = str(REPO_ROOT / "runtime_shims")
 DEBUG_LOG_PATH = Path(
     "/Users/gyubin/Documents/Git/stat4830/.cursor/debug-a13946.log"
 )
@@ -306,6 +308,8 @@ def _assert_transformers_compat() -> None:
             f"{version}. LOZO medium requires transformers<5. "
             "Run `uv sync` after pulling latest repo changes."
         )
+    # Newer transformers removed is_torch_tpu_available from legacy modules.
+    # We inject a compatibility shim through src/sitecustomize.py at run time.
 
 
 def _assert_medium_models_layout(medium_models_dir: Path) -> None:
@@ -417,6 +421,15 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
         hints.append(
             "Transformers major-version mismatch detected. "
             "Run `uv sync` to install repo-pinned transformers<5."
+        )
+    if (
+        "cannot import name 'is_torch_tpu_available'" in text
+        and "transformers.file_utils" in text
+    ):
+        hints.append(
+            "Transformers API mismatch for LOZOtrainer detected. "
+            "Run `uv sync`, restart kernel, and rerun "
+            "(compat shim is in runtime_shims/sitecustomize.py)."
         )
     if "No such file or directory" in text and "k-shot-1k-test" in text:
         hints.append(
@@ -548,6 +561,12 @@ def _run_one(
 ) -> tuple[str, dict[str, Any]]:
     env = os.environ.copy()
     env.update(spec.env)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{COMPAT_PYTHONPATH}:{existing_pythonpath}"
+        if existing_pythonpath
+        else COMPAT_PYTHONPATH
+    )
     run_id = (
         f"{spec.method}:{spec.task}:"
         f"k{spec.k}:seed{spec.seed}:{int(time.time())}"
