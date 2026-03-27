@@ -148,7 +148,16 @@ def main() -> int:
         )
 
     missing_mods = _check_python_modules(
-        ["torch", "transformers", "datasets", "filelock", "loralib"]
+        [
+            "torch",
+            "transformers",
+            "datasets",
+            "filelock",
+            "loralib",
+            "sklearn",
+            "pandas",
+            "loguru",
+        ]
     )
     if missing_mods:
         errors.append(

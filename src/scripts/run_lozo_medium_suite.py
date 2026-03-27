@@ -401,6 +401,15 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
         hints.append(
             "Missing Python dependency `loralib`; run `uv sync` and retry."
         )
+    if "ModuleNotFoundError: No module named 'loguru'" in text:
+        hints.append(
+            "Missing Python dependency `loguru`; run `uv sync` and retry."
+        )
+    if "ModuleNotFoundError: No module named 'sklearn'" in text:
+        hints.append(
+            "Missing Python dependency `scikit-learn`; "
+            "run `uv sync` and retry."
+        )
     if (
         "cannot import name 'find_pruneable_heads_and_indices'" in text
         and "transformers.pytorch_utils" in text
