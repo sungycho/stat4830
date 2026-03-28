@@ -91,6 +91,14 @@ BLOCKS: dict[str, dict] = {
             {"top_k": 1, "no_normalize": True, "label": "top_k_1"},
         ],
     },
+    "pop_scaling_1b_n2_fix": {
+        "description": "Rerun N=2 on OPT-1.3B with no_normalize=True (z-score with 2 samples is unstable).",
+        "model": "facebook/opt-1.3b",
+        "base_overrides": {},
+        "variants": [
+            {"population_size": 2, "num_iters": _pop_iters(2), "no_normalize": True, "label": "N2_nonorm"},
+        ],
+    },
     "pop_scaling_1b_large_n": {
         "description": (
             "Population scaling N∈{64,128} on OPT-1.3B — continuation after N=32 ran out of disk."
@@ -146,7 +154,7 @@ BLOCKS: dict[str, dict] = {
         "variants": [
             # N=1: no antithetic pair, normalization impossible with 1 sample
             {"population_size": 1,   "num_iters": _pop_iters(1),   "no_normalize": True, "label": "N1"},
-            {"population_size": 2,   "num_iters": _pop_iters(2),                          "label": "N2"},
+            {"population_size": 2,   "num_iters": _pop_iters(2),   "no_normalize": True,  "label": "N2"},
             {"population_size": 4,   "num_iters": _pop_iters(4),                          "label": "N4"},
             {"population_size": 8,   "num_iters": _pop_iters(8),                          "label": "N8"},
             {"population_size": 16,  "num_iters": _pop_iters(16),                         "label": "N16"},

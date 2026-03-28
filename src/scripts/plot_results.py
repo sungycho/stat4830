@@ -96,7 +96,8 @@ def collect_variant_curves(variant_dir: Path) -> tuple[list[int], list[float], l
     return grid.tolist(), interpolated.mean(axis=0).tolist(), interpolated.std(axis=0).tolist()
 
 
-def plot_block(exp_dir: Path, out_path: Path, title: str | None = None) -> None:
+def plot_block(exp_dir: Path, out_path: Path, title: str | None = None,
+               baseline: float | None = None) -> None:
     """Plot all variants inside exp_dir as separate lines."""
     variant_dirs = sorted(
         d for d in exp_dir.iterdir()
@@ -110,6 +111,10 @@ def plot_block(exp_dir: Path, out_path: Path, title: str | None = None) -> None:
         if not fwds:
             continue
         fwds_k = [f / 1000 for f in fwds]
+        if baseline is not None:
+            fwds_k = [0.0] + fwds_k
+            means   = [baseline] + list(means)
+            stds    = [0.0]      + list(stds)
         line, = ax.plot(fwds_k, means, marker="o", markersize=3, label=vdir.name)
         stds_arr = np.array(stds)
         means_arr = np.array(means)
@@ -207,6 +212,8 @@ def parse_args():
                    help="Recursively plot each block subdirectory")
     p.add_argument("--heatmap",  action="store_true",
                    help="Also produce calibration heatmap if summary.json exists")
+    p.add_argument("--baseline", type=float, default=None,
+                   help="Draw a horizontal dashed line at this val_acc (zero-shot baseline)")
     return p.parse_args()
 
 
@@ -218,12 +225,12 @@ def main() -> None:
         # Each subdirectory is a block
         for block_dir in sorted(d for d in exp_dir.iterdir() if d.is_dir()):
             out = block_dir / "fig.png"
-            plot_block(block_dir, out, title=block_dir.name)
+            plot_block(block_dir, out, title=block_dir.name, baseline=args.baseline)
             if args.heatmap:
                 plot_calibration_heatmap(block_dir, block_dir / "calibration_heatmap.png")
     else:
         out = Path(args.out) if args.out else exp_dir / "fig.png"
-        plot_block(exp_dir, out, title=args.title)
+        plot_block(exp_dir, out, title=args.title, baseline=args.baseline)
         if args.heatmap:
             plot_calibration_heatmap(exp_dir, exp_dir / "calibration_heatmap.png")
 
