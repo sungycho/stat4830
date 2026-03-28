@@ -75,6 +75,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--primary",   required=True)
     p.add_argument("--secondary", required=True)
+    p.add_argument("--patch",     default=None, help="Extra dir whose results override primary/secondary (e.g. N=2 fix)")
     p.add_argument("--out",       default="results_remote/pop_scaling_1b_merged.png")
     return p.parse_args()
 
@@ -84,6 +85,14 @@ def main():
     primary   = load_summary(Path(args.primary))
     secondary = load_summary(Path(args.secondary))
     merged    = merge(primary, secondary)
+    if args.patch:
+        patch = load_summary(Path(args.patch))
+        # Remap variant names: e.g. "N2_nonorm" -> "N2"
+        remapped = {}
+        for k, v in patch.items():
+            base = k.split("_")[0]   # "N2_nonorm" -> "N2"
+            remapped[base] = {**v, "variant": base}
+        merged.update(remapped)   # patch entries always win
 
     print("Merged results:")
     for k in sorted(merged, key=parse_n):

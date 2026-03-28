@@ -53,6 +53,7 @@ def available_tasks() -> list[str]:
 
 # Register all tasks by importing them here.
 # Adding a new task only requires creating the file and adding one line below.
-from src.tasks.sst2 import Sst2Task    # noqa: E402, F401
-from src.tasks.rte import RteTask      # noqa: E402, F401
-from src.tasks.boolq import BoolqTask  # noqa: E402, F401
+from src.tasks.sst2 import Sst2Task              # noqa: E402, F401
+from src.tasks.rte import RteTask                # noqa: E402, F401
+from src.tasks.boolq import BoolqTask            # noqa: E402, F401
+from src.tasks.countdown import CountdownTask    # noqa: E402, F401

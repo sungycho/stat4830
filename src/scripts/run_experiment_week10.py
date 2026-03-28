@@ -163,6 +163,34 @@ BLOCKS: dict[str, dict] = {
             {"population_size": 128, "num_iters": _pop_iters(128),                        "label": "N128"},
         ],
     },
+    "countdown_qwen3b": {
+        "description": (
+            "ES population scaling on Countdown with Qwen2.5-3B-Instruct. "
+            "N∈{1,2,4,4_nonorm,8,16,32,64} at fixed forward-pass budget. "
+            "Comparable to Neural Thickets RandOpt results (N=1000, K=10/50/100)."
+        ),
+        "model": "Qwen/Qwen2.5-3B-Instruct",
+        "base_overrides": {
+            "task":           "countdown",
+            "train_size":     64,
+            "val_size":       200,
+            "batch_size":     8,
+            "sigma":          3e-4,
+            "lr":             3e-3,
+            "max_new_tokens": 256,
+            "early_stop_delta": 0,
+        },
+        "variants": [
+            {"population_size": 1,  "num_iters": _pop_iters(1),  "no_normalize": True, "label": "N1"},
+            {"population_size": 2,  "num_iters": _pop_iters(2),  "no_normalize": True, "label": "N2"},
+            {"population_size": 4,  "num_iters": _pop_iters(4),                        "label": "N4"},
+            {"population_size": 4,  "num_iters": _pop_iters(4),  "no_normalize": True, "label": "N4_nonorm"},
+            {"population_size": 8,  "num_iters": _pop_iters(8),                        "label": "N8"},
+            {"population_size": 16, "num_iters": _pop_iters(16),                       "label": "N16"},
+            {"population_size": 32, "num_iters": _pop_iters(32),                       "label": "N32"},
+            {"population_size": 64, "num_iters": _pop_iters(64),                       "label": "N64"},
+        ],
+    },
 }
 
 
@@ -186,6 +214,7 @@ _ARG_MAP = {
     "early_stop_delta": "--early-stop-delta",
     "noise_type":       "--noise-type",
     "top_k":            "--top-k",
+    "max_new_tokens":   "--max-new-tokens",
 }
 
 

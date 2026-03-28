@@ -75,6 +75,8 @@ def parse_args():
     p.add_argument("--perturb-verbose",  action="store_true", default=False,
                    help="Print per-layer progress during perturbation (default off on GPU)")
     # ES variant flags
+    p.add_argument("--max-new-tokens",   type=int, default=4,
+                   help="Max tokens to generate per example (default 4 for classification; use ~256 for generation tasks)")
     p.add_argument("--noise-type",       default="gaussian", choices=["gaussian", "rademacher"],
                    help="Perturbation noise distribution")
     p.add_argument("--one-sided",        action="store_true", default=False,
@@ -208,7 +210,7 @@ def main() -> None:
         model_name=args.model,
         device=args.device,
         dtype=dtype,
-        max_new_tokens=4,
+        max_new_tokens=args.max_new_tokens,
         do_sample=False,
     )
 
