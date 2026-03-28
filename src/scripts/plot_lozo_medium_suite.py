@@ -16,6 +16,22 @@ METRIC_RE = re.compile(
 )
 
 
+def _metrics_from_log_tail(log_tail: list[str]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    keys = ("eval_acc", "eval_f1", "eval_mcc", "eval_loss")
+    for line in log_tail:
+        for key in keys:
+            token = f"{key} ="
+            if token not in line:
+                continue
+            raw = line.split(token, 1)[1].strip().split()[0]
+            try:
+                metrics[key] = float(raw)
+            except ValueError:
+                continue
+    return metrics
+
+
 def _choose_metric(
     metrics: dict[str, float],
 ) -> tuple[str | None, float | None]:
@@ -81,10 +97,12 @@ def main() -> None:
         r
         for r in records
         if r.get("method") == "lozo"
-        and r.get("status") in {"completed", "skipped"}
+        and r.get("status") in {"completed", "skipped", "no_marker"}
     ]
     if not lozo_records:
-        raise RuntimeError("No LOZO completed/skipped records found in summary.")
+        raise RuntimeError(
+            "No LOZO completed/skipped/no_marker records found in summary."
+        )
 
     out_dir = (
         Path(args.out_dir).expanduser().resolve()
@@ -96,7 +114,10 @@ def main() -> None:
     # Plot 1: final metric by task (mean across seeds)
     bucket: dict[tuple[str, int], list[float]] = defaultdict(list)
     for rec in lozo_records:
-        metric_name, metric_val = _choose_metric(rec.get("metrics", {}))
+        metrics = rec.get("metrics", {}) or {}
+        if not metrics and rec.get("status") == "no_marker":
+            metrics = _metrics_from_log_tail(rec.get("log_tail", []))
+        metric_name, metric_val = _choose_metric(metrics)
         if metric_val is None:
             continue
         task = str(rec.get("task"))

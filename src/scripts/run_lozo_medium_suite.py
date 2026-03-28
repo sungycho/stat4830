@@ -22,7 +22,9 @@ COMPAT_PYTHONPATH = str(REPO_ROOT / "runtime_shims")
 COMPAT_BINPATH = str(REPO_ROOT / "runtime_shims" / "bin")
 LOZO_SRC_SHIM_PATH = str(REPO_ROOT / "runtime_shims" / "lozo_src")
 BASH_ENV_SHIM = str(REPO_ROOT / "runtime_shims" / "bash_env_lozo.sh")
-LOZO_ENTRYPOINT_SH = str(REPO_ROOT / "runtime_shims" / "run_lozo_entrypoint.sh")
+LOZO_ENTRYPOINT_SH = str(
+    REPO_ROOT / "runtime_shims" / "run_lozo_entrypoint.sh"
+)
 DEBUG_LOG_PATH = REPO_ROOT / ".cursor" / "debug-a13946.log"
 DEBUG_SESSION_ID = "a13946"
 
@@ -171,6 +173,22 @@ def _completion_glob(task: str) -> str:
     return f"test_results_{task}.txt"
 
 
+def _completion_marker_candidates(spec: RunSpec) -> list[Path]:
+    base = Path(spec.result_dir)
+    names = [spec.completion_glob]
+    lowered = f"test_results_{spec.task.lower()}.txt"
+    if lowered not in names:
+        names.append(lowered)
+    return [base / name for name in names]
+
+
+def _resolve_completion_marker(spec: RunSpec) -> Path | None:
+    for marker in _completion_marker_candidates(spec):
+        if marker.exists():
+            return marker
+    return None
+
+
 def _expected_paths(
     medium_models_dir: Path,
     task: str,
@@ -267,12 +285,13 @@ def _build_run_spec(
 
 
 def _is_completed(spec: RunSpec) -> bool:
-    marker = Path(spec.result_dir) / spec.completion_glob
-    return marker.exists()
+    return _resolve_completion_marker(spec) is not None
 
 
 def _extract_metrics(spec: RunSpec) -> dict[str, float]:
-    marker = Path(spec.result_dir) / spec.completion_glob
+    marker = _resolve_completion_marker(spec)
+    if marker is None:
+        return {}
     metrics: dict[str, float] = {}
     for line in _safe_read_lines(marker):
         if "=" not in line:
@@ -477,8 +496,10 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
         )
     if "Default process group has not been initialized" in text:
         hints.append(
-            "Unexpected distributed mode detected (likely leaked rank env vars). "
-            "Runner should source runtime_shims/bash_env_lozo.sh before bash runs."
+            "Unexpected distributed mode detected "
+            "(likely leaked rank env vars). "
+            "Runner should source runtime_shims/bash_env_lozo.sh "
+            "before bash runs."
         )
     if "No such file or directory" in text and "k-shot-1k-test" in text:
         hints.append(
@@ -487,6 +508,12 @@ def _infer_failure_hints(log_tail: list[str], return_code: int) -> list[str]:
         )
     if "CUDA out of memory" in text:
         hints.append("CUDA OOM; lower batch size or use a smaller model.")
+    if return_code == 0 and "***** Test results" in text:
+        hints.append(
+            "Run reached test-results logging but completion marker was not "
+            "detected; check for task-name casing mismatch in "
+            "`test_results_<task>.txt`."
+        )
     if return_code != 0 and not hints:
         hints.append(
             "Run failed; inspect `log_path` tail for traceback details."
@@ -688,6 +715,28 @@ def _run_one(
     payload["gpu_memory_mb_after"] = _gpu_memory_snapshot_mb()
     log_tail = _tail_lines(Path(spec.log_path), log_tail_lines)
     payload["log_tail"] = log_tail
+    marker_candidates = _completion_marker_candidates(spec)
+    resolved_marker = _resolve_completion_marker(spec)
+    payload["completion_marker_candidates"] = [
+        str(p) for p in marker_candidates
+    ]
+    payload["completion_marker_found"] = (
+        str(resolved_marker) if resolved_marker is not None else None
+    )
+    # region agent log
+    _debug_log(
+        run_id=run_id,
+        hypothesis_id="H1_H2_H3",
+        location="src/scripts/run_lozo_medium_suite.py:_run_one:marker_check",
+        message="Completion-marker detection result",
+        data={
+            "task": spec.task,
+            "result_dir": spec.result_dir,
+            "candidates": [str(p) for p in marker_candidates],
+            "found": str(resolved_marker) if resolved_marker else None,
+        },
+    )
+    # endregion
     # region agent log
     _debug_log(
         run_id=run_id,
@@ -703,11 +752,11 @@ def _run_one(
     )
     # endregion
 
-    if proc.returncode == 0 and _is_completed(spec):
+    if proc.returncode == 0 and resolved_marker is not None:
         payload["status"] = "completed"
         payload["metrics"] = _extract_metrics(spec)
         return "completed", payload
-    if proc.returncode == 0 and not _is_completed(spec):
+    if proc.returncode == 0 and resolved_marker is None:
         payload["status"] = "no_marker"
         payload["failure_hints"] = _infer_failure_hints(
             log_tail,
