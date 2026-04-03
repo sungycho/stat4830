@@ -10,22 +10,13 @@ Requires per-example JSON files produced by analyze_failures.py --out.
 
 Usage:
   # 1. First produce base model JSON:
-  uv run python -m src.scripts.analyze_failures \
-      --model facebook/opt-350m --val-size 500 \
-      --out results/failure_analysis/base.json
+  uv run python -m src.scripts.analyze_failures --model facebook/opt-350m --val-size 500 --out results/failure_analysis/base.json
 
   # 2. Produce method JSON(s) via checkpoint:
-  uv run python -m src.scripts.analyze_failures \
-      --model facebook/opt-350m --val-size 500 \
-      --checkpoint results/exp_week9/task_confirm/boolq_best/seed0/best.pt \
-      --out results/failure_analysis/es_seed0.json
+  uv run python -m src.scripts.analyze_failures --model facebook/opt-350m --val-size 500 --checkpoint results/exp_week9/task_confirm/boolq_best/seed0/best.pt --out results/failure_analysis/es_seed0.json
 
   # 3. Plot:
-  uv run python -m src.scripts.plot_failure_decomposition \
-      --base results/failure_analysis/base.json \
-      --methods results/failure_analysis/es_seed0.json \
-      --labels "ES (seed 0)" \
-      --out results/failure_analysis/decomposition.png
+  uv run python -m src.scripts.plot_failure_decomposition --base results/failure_analysis/base.json --methods results/failure_analysis/es_seed0.json --labels "ES (seed 0)" --out results/failure_analysis/decomposition.png
 """
 from __future__ import annotations
 import argparse
@@ -101,8 +92,8 @@ def parse_args():
     )
     p.add_argument("--base",    required=True,
                    help="JSON from analyze_failures.py for the base model")
-    p.add_argument("--methods", nargs="+", required=True,
-                   help="JSON file(s) for each method to compare")
+    p.add_argument("--methods", nargs="+", default=[],
+                   help="JSON file(s) for each method to compare (omit to plot base model only)")
     p.add_argument("--labels",  nargs="+", default=None,
                    help="Display names for each method (same order as --methods)")
     p.add_argument("--out",     default="results/failure_analysis/decomposition.png")
