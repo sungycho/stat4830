@@ -57,3 +57,13 @@ from src.tasks.sst2 import Sst2Task              # noqa: E402, F401
 from src.tasks.rte import RteTask                # noqa: E402, F401
 from src.tasks.boolq import BoolqTask            # noqa: E402, F401
 from src.tasks.countdown import CountdownTask    # noqa: E402, F401
+from src.tasks.mnli import MnliTask              # noqa: E402, F401
+from src.tasks.cb import CbTask                  # noqa: E402, F401
+from src.tasks.wsc import WscTask                # noqa: E402, F401
+from src.tasks.wic import WicTask                # noqa: E402, F401
+from src.tasks.copa import CopaTask              # noqa: E402, F401
+from src.tasks.squad import SquadTask            # noqa: E402, F401
+from src.tasks.record import RecordTask          # noqa: E402, F401
+from src.tasks.drop import DropTask              # noqa: E402, F401
+from src.tasks.gsm8k import Gsm8kTask           # noqa: E402, F401
+from src.tasks.math500 import Math500Task        # noqa: E402, F401
