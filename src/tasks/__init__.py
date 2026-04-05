@@ -67,3 +67,5 @@ from src.tasks.record import RecordTask          # noqa: E402, F401
 from src.tasks.drop import DropTask              # noqa: E402, F401
 from src.tasks.gsm8k import Gsm8kTask           # noqa: E402, F401
 from src.tasks.math500 import Math500Task        # noqa: E402, F401
+from src.tasks.trec import TrecTask              # noqa: E402, F401
+from src.tasks.sst5 import Sst5Task              # noqa: E402, F401

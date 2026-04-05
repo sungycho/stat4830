@@ -23,6 +23,7 @@ Multi-GPU (TODO):
 import argparse
 import json
 import os
+import re
 import random
 import time
 from pathlib import Path
@@ -34,6 +35,90 @@ from src.backends.factory import create_backend
 from src.tasks import get_task, available_tasks
 from src.utils.seeds import set_seeds
 from src.utils.perturb import perturb_inplace, restore_inplace, es_grad_update
+
+_YES_RE = re.compile(r"\byes\b", re.IGNORECASE)
+_NO_RE  = re.compile(r"\bno\b",  re.IGNORECASE)
+
+
+def _classify_output(text: str, example: dict) -> str:
+    """Classify a single output as 'correct', 'wrong_answer', or 'format_error'."""
+    yes = _YES_RE.search(text)
+    no  = _NO_RE.search(text)
+    if yes and no:
+        pred = 1 if yes.start() < no.start() else 0
+    elif yes:
+        pred = 1
+    elif no:
+        pred = 0
+    else:
+        return "format_error"
+    return "correct" if pred == example["label"] else "wrong_answer"
+
+
+def decomp_eval(backend, val_data: list[dict], task, batch_size: int,
+                base_categories: list[str] | None) -> dict:
+    """Run full per-example decomposition eval over val_data.
+
+    Returns aggregate counts and per-example categories.
+    base_categories: list of 'correct'/'wrong_answer'/'format_error' from base model run,
+                     indexed identically to val_data. If None, skips decomposition counts.
+    """
+    categories = []
+    predictions = []  # "yes", "no", "format_error"
+    for i in range(0, len(val_data), batch_size):
+        chunk   = val_data[i : i + batch_size]
+        prompts = [task.build_prompt(ex) for ex in chunk]
+        outputs = backend.generate_batch(prompts)
+        for ex, out in zip(chunk, outputs):
+            categories.append(_classify_output(out, ex))
+            yes = _YES_RE.search(out)
+            no  = _NO_RE.search(out)
+            if yes and no:
+                predictions.append("yes" if yes.start() < no.start() else "no")
+            elif yes:
+                predictions.append("yes")
+            elif no:
+                predictions.append("no")
+            else:
+                predictions.append("format_error")
+
+    n = len(val_data)
+    correct      = categories.count("correct")
+    wrong_answer = categories.count("wrong_answer")
+    format_error = categories.count("format_error")
+
+    result = {
+        "n": n,
+        "correct": correct,
+        "wrong_answer": wrong_answer,
+        "format_error": format_error,
+        "val_acc": correct / n,
+        "pred_yes": predictions.count("yes"),
+        "pred_no": predictions.count("no"),
+        "pred_format": predictions.count("format_error"),
+        "categories": categories,
+    }
+
+    if base_categories is not None:
+        strictly_correct = reasoning_thicket = format_thicket = regression = 0
+        for base_cat, method_cat in zip(base_categories, categories):
+            base_ok   = base_cat   == "correct"
+            method_ok = method_cat == "correct"
+            if base_ok and method_ok:
+                strictly_correct += 1
+            elif base_ok and not method_ok:
+                regression += 1
+            elif not base_ok and method_ok:
+                if base_cat == "format_error":
+                    format_thicket += 1
+                else:
+                    reasoning_thicket += 1
+        result["strictly_correct"]  = strictly_correct
+        result["reasoning_thicket"] = reasoning_thicket
+        result["format_thicket"]    = format_thicket
+        result["regression"]        = regression
+
+    return result
 
 
 def _default_device() -> str:
@@ -85,6 +170,11 @@ def parse_args():
                    help="Disable z-score reward normalisation in gradient update")
     p.add_argument("--top-k",            type=int,   default=0,
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
+    # decomposition tracking
+    p.add_argument("--track-decomposition", action="store_true", default=False,
+                   help="At each val step, run full per-example decomposition analysis")
+    p.add_argument("--base-json",        type=str,   default=None,
+                   help="Path to base model analyze_failures.py JSON for decomposition tracking")
     return p.parse_args()
 
 
@@ -201,8 +291,18 @@ def main() -> None:
 
     run_dir = make_run_dir(args)
     log_path = run_dir / "log.jsonl"
+    decomp_log_path = run_dir / "decomp_log.jsonl"
     log_entry(log_path, {"event": "config", **vars(args), "resolved_dtype": dtype, "normalize": normalize})
     print(f"Run dir: {run_dir}")
+
+    # Load base model categories for decomposition tracking
+    base_categories = None
+    if args.track_decomposition:
+        if args.base_json is None:
+            raise SystemExit("[error] --track-decomposition requires --base-json")
+        base_json = json.loads(Path(args.base_json).read_text())
+        base_categories = [ex["category"] for ex in base_json["examples"]]
+        print(f"[decomp] loaded base categories from {args.base_json} (n={len(base_categories)})")
 
     t_start = time.perf_counter()
     backend = create_backend(
@@ -298,10 +398,29 @@ def main() -> None:
         save_checkpoint(backend.model, run_dir / "latest.pt", current_state)
 
         if (iteration + 1) % args.val_every == 0:
-            val_acc = validate(backend, val_data, task, batch_size=args.batch_size)
-            cumulative_total_fwd += len(val_data)  # val cost charged to total only
+            if args.track_decomposition:
+                decomp = decomp_eval(backend, val_data, task, args.batch_size, base_categories)
+                val_acc = decomp["val_acc"]
+                cumulative_total_fwd += len(val_data)
+                decomp_entry = {
+                    "iteration": start_iter + iteration + 1,
+                    "train_fwd": cumulative_train_fwd,
+                    **{k: v for k, v in decomp.items() if k != "categories"},
+                }
+                log_entry(decomp_log_path, decomp_entry)
+                decomp_summary = (
+                    f"strict={decomp.get('strictly_correct', '?')} "
+                    f"reason={decomp.get('reasoning_thicket', '?')} "
+                    f"format={decomp.get('format_thicket', '?')} "
+                    f"regress={decomp.get('regression', '?')}"
+                )
+                print(f"  [decomp] {decomp_summary}")
+            else:
+                val_acc = validate(backend, val_data, task, batch_size=args.batch_size)
+                cumulative_total_fwd += len(val_data)
+
             entry["val_acc"] = val_acc
-            entry["total_fwd"] = cumulative_total_fwd  # update total after val
+            entry["total_fwd"] = cumulative_total_fwd
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc

@@ -34,6 +34,7 @@ _ARG_MAP = {
     "val_size":        "--val-size",
     "val_every":       "--val-every",
     "early_stop_delta":"--early-stop-delta",
+    "max_new_tokens":  "--max-new-tokens",
 }
 
 DEFAULT_CONFIG = "configs/grid_search.json"
@@ -94,7 +95,7 @@ def combo_to_slug(combo: dict) -> str:
 
 def run_combination(combo: dict, run_dir: Path, model: str | None, task: str | None, seed: int) -> tuple[Path, int]:
     run_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, "-m", "src.scripts.sanity_es_loop", "--out-dir", str(run_dir)]
+    cmd = [sys.executable, "-m", "src.scripts.train_es", "--out-dir", str(run_dir)]
     for key, val in combo.items():
         if key in _ARG_MAP:
             cmd.extend([_ARG_MAP[key], str(val)])
