@@ -153,6 +153,7 @@ _ARG_MAP = {
     "early_stop_delta":"--early-stop-delta",
     "noise_type":      "--noise-type",
     "top_k":           "--top-k",
+    "max_new_tokens":  "--max-new-tokens",
 }
 
 
@@ -296,8 +297,12 @@ def parse_args():
                    help="Override dtype for all runs")
     p.add_argument("--task",       default=None,
                    help="Override task for all runs")
-    p.add_argument("--num-iters",  type=int, default=None,
+    p.add_argument("--num-iters",      type=int, default=None,
                    help="Override num_iters for all runs")
+    p.add_argument("--max-new-tokens", type=int, default=None,
+                   help="Override max_new_tokens for all runs")
+    p.add_argument("--val-size",       type=int, default=None,
+                   help="Override val_size for all runs")
     p.add_argument("--best-sigma", type=float, default=None,
                    help="Best sigma from calibration — applied to task_confirm block")
     p.add_argument("--best-lr",    type=float, default=None,
@@ -317,6 +322,10 @@ def main() -> None:
         extra_base["task"] = args.task
     if args.num_iters:
         extra_base["num_iters"] = args.num_iters
+    if args.max_new_tokens:
+        extra_base["max_new_tokens"] = args.max_new_tokens
+    if args.val_size:
+        extra_base["val_size"] = args.val_size
 
     # Patch task_confirm variants with calibrated HPs if provided
     if args.best_sigma is not None or args.best_lr is not None:
