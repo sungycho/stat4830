@@ -38,6 +38,14 @@ class RteTask(Task):
             "Answer:"
         )
 
+    def label_words(self):
+        return ["yes", "no"]
+
+    def score_ce(self, log_probs, example):
+        # label 0 = entailment (yes), label 1 = not_entailment (no)
+        correct = "yes" if example["label"] == 0 else "no"
+        return log_probs[correct]
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

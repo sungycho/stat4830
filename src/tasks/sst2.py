@@ -34,6 +34,13 @@ class Sst2Task(Task):
             "Sentiment:"
         )
 
+    def label_words(self):
+        return ["positive", "negative"]
+
+    def score_ce(self, log_probs, example):
+        correct = _LABEL_MAP[example["label"]]
+        return log_probs[correct]
+
     def score(self, text, example):
         pos = _POS.search(text)
         neg = _NEG.search(text)

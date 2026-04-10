@@ -172,6 +172,11 @@ def parse_args():
                    help="Disable z-score reward normalisation in gradient update")
     p.add_argument("--top-k",            type=int,   default=0,
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
+    # reward model
+    p.add_argument("--reward", default="accuracy", choices=["accuracy", "ce"],
+                   help="Training reward signal. 'accuracy': binary +1/-1 (default). "
+                        "'ce': restricted log-softmax over label words — requires "
+                        "task.label_words() to be non-None and white-box model access.")
     # decomposition tracking
     p.add_argument("--track-decomposition", action="store_true", default=False,
                    help="At each val step, run full per-example decomposition analysis")
@@ -217,11 +222,25 @@ def load_run_state(checkpoint_path: str) -> dict:
 
 
 def eval_batch(backend, examples: list[dict], task) -> float:
-    """Evaluate a mini-batch in a single batched forward pass."""
+    """Evaluate a mini-batch using binary accuracy reward (+1/-1 per sample)."""
     prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
     prompts = [prompt_fn(ex) for ex in examples]
     outputs = backend.generate_batch(prompts)
     rewards = [task.score(text, ex) for text, ex in zip(outputs, examples)]
+    return sum(rewards) / len(rewards)
+
+
+def eval_batch_ce(backend, examples: list[dict], task) -> float:
+    """Evaluate a mini-batch using CE reward (restricted log-softmax over label words).
+
+    Single forward pass only — no generation needed. Returns mean log P(correct | prompt)
+    over the batch, where the log-prob is restricted/normalized over label_words().
+    Range: (-inf, 0], where 0 means the model is certain about every correct label.
+    """
+    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+    prompts = [prompt_fn(ex) for ex in examples]
+    log_probs_list = backend.score_logprobs_batch(prompts, task.label_words())
+    rewards = [task.score_ce(lp, ex) for lp, ex in zip(log_probs_list, examples)]
     return sum(rewards) / len(rewards)
 
 
@@ -248,12 +267,13 @@ def run_es_iteration(
     seeds, advantages = [], []
     fwd_passes = 0
 
+    _eval = eval_batch_ce if args.reward == "ce" else eval_batch
     nt = args.noise_type
     for _ in range(args.population_size):
         seed = random.randint(0, 2**31)
 
         perturb_inplace(model, seed, args.sigma, sign=+1, noise_type=nt)  # θ → θ+σε
-        r_plus = eval_batch(backend, batch, task)
+        r_plus = _eval(backend, batch, task)
         fwd_passes += effective_batch
 
         if args.one_sided:
@@ -261,7 +281,7 @@ def run_es_iteration(
             adv = r_plus
         else:
             perturb_inplace(model, seed, 2 * args.sigma, sign=-1, noise_type=nt)  # θ+σε → θ-σε
-            r_minus = eval_batch(backend, batch, task)
+            r_minus = _eval(backend, batch, task)
             fwd_passes += effective_batch
             restore_inplace(model, seed, args.sigma, sign=-1, noise_type=nt)    # θ-σε → θ
             adv = r_plus - r_minus
@@ -308,6 +328,13 @@ def main() -> None:
         base_categories = [ex["category"] for ex in base_json["examples"]]
         print(f"[decomp] loaded base categories from {args.base_json} (n={len(base_categories)})")
 
+    task = get_task(args.task)
+    if args.reward == "ce" and task.label_words() is None:
+        raise SystemExit(
+            f"[error] --reward ce is not supported for task '{args.task}': "
+            f"task.label_words() returned None. Use --reward accuracy instead."
+        )
+
     t_start = time.perf_counter()
     backend = create_backend(
         "hf",
@@ -318,7 +345,6 @@ def main() -> None:
         do_sample=False,
     )
 
-    task = get_task(args.task)
     train_data, val_data = task.load_data(
         train_size=args.train_size, val_size=args.val_size, seed=args.seed
     )
@@ -340,7 +366,7 @@ def main() -> None:
         f"sigma={args.sigma}  lr={args.lr}\n"
         f"noise={args.noise_type}  one_sided={args.one_sided}  "
         f"normalize={normalize}  top_k={args.top_k}\n"
-        f"train={len(train_data)}  val={len(val_data)}"
+        f"reward={args.reward}  train={len(train_data)}  val={len(val_data)}"
     )
 
     baseline_acc = validate(backend, val_data, task, batch_size=args.batch_size)  # chunked batched eval

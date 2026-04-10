@@ -46,6 +46,13 @@ class BoolqTask(Task):
             "Answer:"
         )
 
+    def label_words(self):
+        return ["yes", "no"]
+
+    def score_ce(self, log_probs, example):
+        correct = "yes" if example["label"] == 1 else "no"
+        return log_probs[correct]
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

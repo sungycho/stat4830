@@ -41,6 +41,25 @@ class Task(ABC):
         """Score one model generation. Return +1.0 correct, -1.0 wrong/unparseable."""
         ...
 
+    def label_words(self) -> list[str] | None:
+        """Return label words for CE scoring (e.g. ['yes', 'no']).
+
+        Return None if CE scoring is not supported for this task (e.g. generation
+        tasks or multi-word labels with ambiguous first tokens).
+        The order must be consistent with score_ce().
+        """
+        return None
+
+    def score_ce(self, log_probs: dict[str, float], example: dict) -> float:
+        """Score using restricted log-probabilities over label_words().
+
+        log_probs: {word: log P(word | prompt)} restricted log-softmax over
+                   label_words(), as returned by backend.score_logprobs_batch().
+        Returns the log-prob of the correct label (higher = better).
+        Only called when label_words() is not None.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement score_ce")
+
 
 def register(name: str):
     """Class decorator that adds a Task subclass to the registry."""

@@ -49,6 +49,13 @@ class MnliTask(Task):
             "Answer:"
         )
 
+    def label_words(self):
+        return ["entailment", "neutral", "contradiction"]
+
+    def score_ce(self, log_probs, example):
+        correct = _LABEL_MAP[example["label"]]
+        return log_probs[correct]
+
     def score(self, text, example):
         ent = _ENT.search(text)
         neu = _NEU.search(text)

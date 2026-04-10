@@ -27,6 +27,13 @@ class TrecTask(Task):
             f"Type:"
         )
 
+    def label_words(self):
+        return _LABELS  # ["abbreviation", "entity", "description", "human", "location", "numeric"]
+
+    def score_ce(self, log_probs, example):
+        correct = _LABELS[example["label"]]
+        return log_probs[correct]
+
     def score(self, text, example):
         first_match = None
         first_pos = len(text) + 1

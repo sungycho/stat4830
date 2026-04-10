@@ -85,6 +85,62 @@ class HFBackend:
         """Single-prompt generation — delegates to generate_batch for consistency."""
         return self.generate_batch([prompt])[0]
 
+    @torch.no_grad()
+    def score_logprobs_batch(
+        self, prompts: list[str], label_words: list[str]
+    ) -> list[dict[str, float]]:
+        """Single forward pass (no generation). Returns restricted log-softmax over
+        label_words for each prompt: {word: log P(word | prompt, label_set)}.
+
+        Each label word is represented by its first subword token as it would
+        appear mid-sequence (encoded with a leading space). Multi-token label
+        words are approximated by their first token only.
+        """
+        # Get the first token ID for each label word as it appears mid-sequence.
+        label_token_ids: dict[str, int] = {}
+        for word in label_words:
+            ids = self.tokenizer.encode(" " + word, add_special_tokens=False)
+            label_token_ids[word] = ids[0]
+
+        # Apply chat template if needed (same as generate_batch).
+        if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
+            formatted = [
+                self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for p in prompts
+            ]
+        else:
+            formatted = prompts
+
+        inputs = self.tokenizer(
+            formatted,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+
+        outputs = self.model(**inputs)
+        # With left-padding, position -1 is always the last real token.
+        last_logits = outputs.logits[:, -1, :]  # [batch, vocab]
+
+        # Restricted log-softmax: softmax over label token logits only.
+        token_ids = [label_token_ids[w] for w in label_words]
+        label_logits = last_logits[:, token_ids]                          # [batch, n_labels]
+        restricted_log_probs = torch.nn.functional.log_softmax(           # [batch, n_labels]
+            label_logits, dim=-1
+        )
+
+        results = []
+        for i in range(len(prompts)):
+            results.append({
+                word: restricted_log_probs[i, j].item()
+                for j, word in enumerate(label_words)
+            })
+        return results
+
     @property
     def is_instruct(self) -> bool:
         """True if the tokenizer has a chat template (instruction-tuned model)."""
