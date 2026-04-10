@@ -30,6 +30,19 @@ class WscTask(Task):
             f"Answer yes or no:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            "The dog chased the cat until it ran up a tree.\n"
+            'Does "it" refer to "cat"?\n'
+            "Answer: yes\n\n"
+            "The boy gave the toy to his sister, but she didn't want it.\n"
+            'Does "she" refer to "boy"?\n'
+            "Answer: no\n\n"
+            f'{example["text"]}\n'
+            f'Does "{example["span2_text"]}" refer to "{example["span1_text"]}"?\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -49,10 +50,13 @@ MODEL_REGISTRY: dict[str, str] = {
     "opt-66b":         "facebook/opt-66b",
     # LLaMA family
     "llama-2-7b":      "meta-llama/Llama-2-7b-hf",
-    "llama-3-8b":      "meta-llama/Meta-Llama-3-8B",
     "llama-2-13b":     "meta-llama/Llama-2-13b-hf",
     "llama-2-70b":     "meta-llama/Llama-2-70b-hf",
+    "llama-3-8b":      "meta-llama/Meta-Llama-3-8B",
+    "llama-3.1-8b":    "meta-llama/Llama-3.1-8B",
     "llama-3.1-70b":   "meta-llama/Llama-3.1-70B",
+    "llama-3.2-1b":    "meta-llama/Llama-3.2-1B",
+    "llama-3.2-3b":    "meta-llama/Llama-3.2-3B",
     # GPT-2
     "gpt2-xl":         "gpt2-xl",
     # Phi
@@ -97,9 +101,10 @@ def evaluate(
     total = len(val_data)
     parse_failures = 0
 
+    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
     for i in range(0, total, batch_size):
         chunk = val_data[i:i + batch_size]
-        prompts = [task.build_prompt(ex) for ex in chunk]
+        prompts = [prompt_fn(ex) for ex in chunk]
         outputs = backend.generate_batch(prompts)
         for text, ex in zip(outputs, chunk):
             score = task.score(text, ex)
@@ -171,6 +176,8 @@ def parse_args():
         "--out-dir", default=None,
         help="Output dir (default: results/baseline_zeroshot_<ts>)",
     )
+    p.add_argument("--delete-cache", action="store_true", default=False,
+                   help="Delete HuggingFace disk cache for each model after evaluation (saves disk space)")
     return p.parse_args()
 
 
@@ -392,6 +399,16 @@ def main() -> None:
         if args.device.startswith("cuda"):
             torch.cuda.empty_cache()
         print(f"\n  Model {model_alias} unloaded.")
+
+        if args.delete_cache:
+            cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+            model_cache_name = "models--" + hf_id.replace("/", "--")
+            model_cache_path = cache_dir / model_cache_name
+            if model_cache_path.exists():
+                shutil.rmtree(model_cache_path)
+                print(f"  Cache deleted: {model_cache_path}")
+            else:
+                print(f"  [warn] Cache not found at {model_cache_path}")
 
     results_path = out_dir / "baseline_results.json"
     with open(results_path, "w") as f:

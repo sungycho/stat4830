@@ -52,6 +52,16 @@ class Gsm8kTask(Task):
             f"End with the final numeric answer after ####."
         )
 
+    def build_prompt_base(self, example):
+        return (
+            "Question: Tom has 5 apples. He gives 2 to his friend. How many does he have left?\n"
+            "Solution: Tom starts with 5 apples. He gives away 2. 5 - 2 = 3. #### 3\n\n"
+            "Question: A car travels 60 miles per hour for 3 hours. How far does it travel?\n"
+            "Solution: Distance = speed × time = 60 × 3 = 180 miles. #### 180\n\n"
+            f'Question: {example["question"]}\n'
+            "Solution:"
+        )
+
     def score(self, text, example):
         gold = _extract_gold_answer(example["answer"])
         if gold is None:

@@ -33,6 +33,22 @@ class CbTask(Task):
             f"Answer entailment, contradiction, or neutral:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            'Premise: "John said that he would come to the party tomorrow."\n'
+            'Hypothesis: "John will attend the party."\n'
+            "Answer: entailment\n\n"
+            'Premise: "Mary told us she hates cold weather."\n'
+            'Hypothesis: "Mary enjoys the cold."\n'
+            "Answer: contradiction\n\n"
+            'Premise: "The experiment was conducted last Tuesday."\n'
+            'Hypothesis: "The scientists worked on Wednesday."\n'
+            "Answer: neutral\n\n"
+            f'Premise: "{example["premise"]}"\n'
+            f'Hypothesis: "{example["hypothesis"]}"\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         ent = _ENT.search(text)
         con = _CON.search(text)

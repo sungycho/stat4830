@@ -24,6 +24,16 @@ class Sst2Task(Task):
             f"Answer with exactly one word — positive or negative:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            'Sentence: "A masterpiece of cinema — thrilling, emotional, and unforgettable."\n'
+            "Sentiment: positive\n\n"
+            'Sentence: "Painfully slow and utterly devoid of any interesting ideas."\n'
+            "Sentiment: negative\n\n"
+            f'Sentence: "{example["sentence"]}"\n'
+            "Sentiment:"
+        )
+
     def score(self, text, example):
         pos = _POS.search(text)
         neg = _NEG.search(text)

@@ -157,6 +157,8 @@ def parse_args():
                    help="Output dir (default: results/<task>_<timestamp>)")
     p.add_argument("--resume-from",      type=str,   default=None,
                    help="Path to a checkpoint (.pt) to load weights from before training")
+    p.add_argument("--no-save",          action="store_true", default=False,
+                   help="Disable checkpoint saving (saves disk space during sweeps)")
     p.add_argument("--perturb-verbose",  action="store_true", default=False,
                    help="Print per-layer progress during perturbation (default off on GPU)")
     # ES variant flags
@@ -216,7 +218,8 @@ def load_run_state(checkpoint_path: str) -> dict:
 
 def eval_batch(backend, examples: list[dict], task) -> float:
     """Evaluate a mini-batch in a single batched forward pass."""
-    prompts = [task.build_prompt(ex) for ex in examples]
+    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+    prompts = [prompt_fn(ex) for ex in examples]
     outputs = backend.generate_batch(prompts)
     rewards = [task.score(text, ex) for text, ex in zip(outputs, examples)]
     return sum(rewards) / len(rewards)
@@ -224,10 +227,11 @@ def eval_batch(backend, examples: list[dict], task) -> float:
 
 def validate(backend, val_data: list[dict], task, batch_size: int = 16) -> float:
     """Validate over the full val set, chunked into batched forward passes."""
+    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
     correct = 0
     for i in range(0, len(val_data), batch_size):
         chunk = val_data[i:i + batch_size]
-        prompts = [task.build_prompt(ex) for ex in chunk]
+        prompts = [prompt_fn(ex) for ex in chunk]
         outputs = backend.generate_batch(prompts)
         correct += sum(task.score(text, ex) > 0 for text, ex in zip(outputs, chunk))
     return correct / len(val_data)
@@ -349,11 +353,12 @@ def main() -> None:
     # total_fwd: train_fwd + validation passes (informational; not used as x-axis).
     cumulative_train_fwd = run_state.get("cumulative_train_fwd", 0)
     cumulative_total_fwd = run_state.get("cumulative_total_fwd", 0)
-    save_checkpoint(backend.model, run_dir / "best.pt", {
-        "iteration": start_iter, "best_val_acc": best_val_acc,
-        "cumulative_train_fwd": cumulative_train_fwd,
-        "cumulative_total_fwd": cumulative_total_fwd,
-    })
+    if not args.no_save:
+        save_checkpoint(backend.model, run_dir / "best.pt", {
+            "iteration": start_iter, "best_val_acc": best_val_acc,
+            "cumulative_train_fwd": cumulative_train_fwd,
+            "cumulative_total_fwd": cumulative_total_fwd,
+        })
 
     for iteration in range(args.num_iters):
         t_iter = time.perf_counter()
@@ -395,7 +400,8 @@ def main() -> None:
             "cumulative_train_fwd": cumulative_train_fwd,
             "cumulative_total_fwd": cumulative_total_fwd,
         }
-        save_checkpoint(backend.model, run_dir / "latest.pt", current_state)
+        if not args.no_save:
+            save_checkpoint(backend.model, run_dir / "latest.pt", current_state)
 
         if (iteration + 1) % args.val_every == 0:
             if args.track_decomposition:
@@ -424,11 +430,12 @@ def main() -> None:
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                save_checkpoint(backend.model, run_dir / "best.pt", {
-                    "iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc,
-                    "cumulative_train_fwd": cumulative_train_fwd,
-                    "cumulative_total_fwd": cumulative_total_fwd,
-                })
+                if not args.no_save:
+                    save_checkpoint(backend.model, run_dir / "best.pt", {
+                        "iteration": start_iter + iteration + 1, "best_val_acc": best_val_acc,
+                        "cumulative_train_fwd": cumulative_train_fwd,
+                        "cumulative_total_fwd": cumulative_total_fwd,
+                    })
                 print(f"  >> val_acc={val_acc:.3f} — new best | train_fwd={cumulative_train_fwd}")
             else:
                 print(f"  >> val_acc={val_acc:.3f} (best={best_val_acc:.3f}) | train_fwd={cumulative_train_fwd}")

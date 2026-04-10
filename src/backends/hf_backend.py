@@ -85,5 +85,10 @@ class HFBackend:
         """Single-prompt generation — delegates to generate_batch for consistency."""
         return self.generate_batch([prompt])[0]
 
+    @property
+    def is_instruct(self) -> bool:
+        """True if the tokenizer has a chat template (instruction-tuned model)."""
+        return bool(getattr(self.tokenizer, "chat_template", None))
+
     def sync_weights(self, model) -> None:
         pass  # HFBackend is the parameter owner; already in sync

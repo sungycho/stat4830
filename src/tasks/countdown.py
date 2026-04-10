@@ -101,6 +101,22 @@ class CountdownTask(Task):
             f"Write only the expression, nothing else."
         )
 
+    def build_prompt_base(self, example: dict) -> str:
+        nums   = example["nums"]
+        target = example["target"]
+        nums_str = ", ".join(str(n) for n in nums)
+        return (
+            "Using the numbers 3, 8, 5, create an arithmetic expression "
+            "(using +, -, *, / and each number at most once) that equals 24.\n"
+            "Expression: 3 * 8\n\n"
+            "Using the numbers 2, 7, 9, create an arithmetic expression "
+            "(using +, -, *, / and each number at most once) that equals 18.\n"
+            "Expression: 9 + 7 + 2\n\n"
+            f"Using the numbers {nums_str}, create an arithmetic expression "
+            f"(using +, -, *, / and each number at most once) that equals {target}.\n"
+            "Expression:"
+        )
+
     def score(self, text: str, example: dict) -> float:
         target    = int(example["target"])
         available = [int(n) for n in example["nums"]]

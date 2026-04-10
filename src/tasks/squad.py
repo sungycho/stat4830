@@ -40,6 +40,22 @@ class SquadTask(Task):
             f"Answer in as few words as possible:"
         )
 
+    def build_prompt_base(self, example):
+        ctx = example["context"][:_CONTEXT_MAX_CHARS]
+        if len(example["context"]) > _CONTEXT_MAX_CHARS:
+            ctx += "..."
+        return (
+            "Context: The Amazon River is the largest river in the world by discharge volume and drainage basin.\n"
+            "Question: What is the Amazon River the largest of?\n"
+            "Answer: river in the world\n\n"
+            "Context: Marie Curie was a physicist and chemist who conducted pioneering research on radioactivity.\n"
+            "Question: What field did Marie Curie conduct pioneering research in?\n"
+            "Answer: radioactivity\n\n"
+            f"Context: {ctx}\n"
+            f'Question: {example["question"]}\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         pred = _normalize(text)
         if not pred:

@@ -29,6 +29,22 @@ class RecordTask(Task):
             f"Answer with the entity name only:"
         )
 
+    def build_prompt_base(self, example):
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return (
+            "Passage: Clark was born in London and later moved to New York to pursue his career.\n"
+            "Query: @placeholder is where Clark was born.\n"
+            "Entity: London\n\n"
+            "Passage: The 2012 Summer Olympics were held in London at the newly built Olympic Stadium.\n"
+            "Query: The venue for the 2012 Olympics was @placeholder.\n"
+            "Entity: Olympic Stadium\n\n"
+            f"Passage: {passage}\n"
+            f'Query: {example["query"]}\n'
+            "Entity:"
+        )
+
     def score(self, text, example):
         pred = text.strip().lower()
         if not pred:

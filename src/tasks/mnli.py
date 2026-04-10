@@ -33,6 +33,22 @@ class MnliTask(Task):
             f"Answer entailment, contradiction, or neutral:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            'Premise: "The woman is playing tennis outdoors."\n'
+            'Hypothesis: "A person is engaged in a sport."\n'
+            "Answer: entailment\n\n"
+            'Premise: "Two men are cooking steaks on a grill."\n'
+            'Hypothesis: "The men are vegetarians."\n'
+            "Answer: contradiction\n\n"
+            'Premise: "She bought a new dress for the event."\n'
+            'Hypothesis: "She spent more than fifty dollars."\n'
+            "Answer: neutral\n\n"
+            f'Premise: "{example["premise"]}"\n'
+            f'Hypothesis: "{example["hypothesis"]}"\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         ent = _ENT.search(text)
         neu = _NEU.search(text)

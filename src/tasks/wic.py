@@ -31,6 +31,22 @@ class WicTask(Task):
             f"Answer yes or no:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            'Sentence 1: "He wound a thread around the spool."\n'
+            'Sentence 2: "The nurse wound the bandage around his arm."\n'
+            'Is the word "wound" used in the same sense in both sentences?\n'
+            "Answer: yes\n\n"
+            'Sentence 1: "She went to the bank to deposit money."\n'
+            'Sentence 2: "They picnicked on the river bank."\n'
+            'Is the word "bank" used in the same sense in both sentences?\n'
+            "Answer: no\n\n"
+            f'Sentence 1: "{example["sentence1"]}"\n'
+            f'Sentence 2: "{example["sentence2"]}"\n'
+            f'Is the word "{example["word"]}" used in the same sense in both sentences?\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

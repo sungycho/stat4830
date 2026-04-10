@@ -40,6 +40,22 @@ class DropTask(Task):
             f"Answer in as few words as possible:"
         )
 
+    def build_prompt_base(self, example):
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return (
+            "Passage: The stadium holds 50,000 fans. During the championship game, 43,000 attended.\n"
+            "Question: How many seats were empty during the championship game?\n"
+            "Answer: 7,000\n\n"
+            "Passage: The journey from Paris to London takes about 2 hours and 15 minutes by Eurostar.\n"
+            "Question: How long does the train journey take?\n"
+            "Answer: 2 hours and 15 minutes\n\n"
+            f"Passage: {passage}\n"
+            f'Question: {example["question"]}\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         pred = _normalize(text)
         if not pred:

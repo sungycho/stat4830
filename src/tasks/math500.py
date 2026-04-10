@@ -54,6 +54,16 @@ class Math500Task(Task):
             f"in \\boxed{{}}."
         )
 
+    def build_prompt_base(self, example):
+        return (
+            "Problem: What is the value of $2 + 2$?\n"
+            "Solution: $2 + 2 = 4$. \\boxed{4}\n\n"
+            "Problem: Simplify $(3 \\times 4) - 5$.\n"
+            "Solution: $3 \\times 4 = 12$, then $12 - 5 = 7$. \\boxed{7}\n\n"
+            f'Problem: {example["problem"]}\n'
+            "Solution:"
+        )
+
     def score(self, text, example):
         gold_boxed = _extract_boxed(example["solution"])
         if gold_boxed is None:

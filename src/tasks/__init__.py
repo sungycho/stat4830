@@ -27,6 +27,15 @@ class Task(ABC):
         """Build the prompt string for a single example."""
         ...
 
+    def build_prompt_base(self, example: dict) -> str:
+        """Few-shot completion-style prompt for base models (no chat template).
+
+        Defaults to build_prompt so existing tasks work without any changes.
+        Override in subclasses to provide in-context examples that help base
+        models infer the expected completion pattern.
+        """
+        return self.build_prompt(example)
+
     @abstractmethod
     def score(self, text: str, example: dict) -> float:
         """Score one model generation. Return +1.0 correct, -1.0 wrong/unparseable."""

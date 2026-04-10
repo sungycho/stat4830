@@ -30,6 +30,22 @@ class BoolqTask(Task):
             f"Answer yes or no:"
         )
 
+    def build_prompt_base(self, example):
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return (
+            'Passage: "Mercury is the smallest planet in the solar system and the closest to the Sun."\n'
+            "Question: is Mercury the largest planet?\n"
+            "Answer: no\n\n"
+            'Passage: "Water boils at 100 degrees Celsius at standard atmospheric pressure."\n'
+            "Question: does water boil at 100 degrees Celsius?\n"
+            "Answer: yes\n\n"
+            f'Passage: "{passage}"\n'
+            f"Question: {example['question']}?\n"
+            "Answer:"
+        )
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

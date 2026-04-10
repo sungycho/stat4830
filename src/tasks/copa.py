@@ -32,6 +32,26 @@ class CopaTask(Task):
             f"Answer 1 or 2:"
         )
 
+    def build_prompt_base(self, example):
+        q = example["question"]
+        return (
+            'Premise: "The man lost his footing on the ice."\n'
+            "What is the effect?\n"
+            '1: "He slipped and fell."\n'
+            '2: "He ran a marathon."\n'
+            "Answer: 1\n\n"
+            'Premise: "The woman felt exhausted after work."\n'
+            "What is the cause?\n"
+            '1: "She had slept for ten hours."\n'
+            '2: "She had worked a double shift."\n'
+            "Answer: 2\n\n"
+            f'Premise: "{example["premise"]}"\n'
+            f"What is the {q}?\n"
+            f'1: "{example["choice1"]}"\n'
+            f'2: "{example["choice2"]}"\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         one = _ONE.search(text)
         two = _TWO.search(text)

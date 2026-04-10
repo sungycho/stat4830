@@ -25,6 +25,19 @@ class RteTask(Task):
             f"Does the hypothesis follow from the premise? Answer yes or no:"
         )
 
+    def build_prompt_base(self, example):
+        return (
+            'Premise: "The Eiffel Tower is located in Paris, France."\n'
+            'Hypothesis: "The Eiffel Tower is in France."\n'
+            "Answer: yes\n\n"
+            'Premise: "The cat sat on the mat."\n'
+            'Hypothesis: "The dog sat on the mat."\n'
+            "Answer: no\n\n"
+            f'Premise: "{example["sentence1"]}"\n'
+            f'Hypothesis: "{example["sentence2"]}"\n'
+            "Answer:"
+        )
+
     def score(self, text, example):
         yes = _YES.search(text)
         no = _NO.search(text)

@@ -136,7 +136,7 @@ BLOCKS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # CLI → train_es.py arg translation
 # ---------------------------------------------------------------------------
-_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize"}
+_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize", "no_save": "--no-save"}
 _ARG_MAP = {
     "task":            "--task",
     "model":           "--model",
@@ -216,6 +216,10 @@ def run_block(
         base["model"] = model
 
     variants = block["variants"]
+    if extra_base.get("variant"):
+        variants = [v for v in variants if variant_slug(v) == extra_base["variant"]]
+        if not variants:
+            raise SystemExit(f"[error] No variant matching '{extra_base['variant']}' in block '{block_name}'")
     print(f"\n{'='*60}")
     print(f"Block: {block_name} — {block['description']}")
     print(f"  {len(variants)} variant(s) × {n_seeds} seed(s) = {len(variants)*n_seeds} runs")
@@ -303,10 +307,16 @@ def parse_args():
                    help="Override max_new_tokens for all runs")
     p.add_argument("--val-size",       type=int, default=None,
                    help="Override val_size for all runs")
+    p.add_argument("--val-every",      type=int, default=None,
+                   help="Override val_every for all runs")
     p.add_argument("--best-sigma", type=float, default=None,
                    help="Best sigma from calibration — applied to task_confirm block")
     p.add_argument("--best-lr",    type=float, default=None,
                    help="Best lr from calibration — applied to task_confirm block")
+    p.add_argument("--variant",    default=None,
+                   help="Run only the variant with this label (e.g. N32)")
+    p.add_argument("--no-save",    action="store_true", default=False,
+                   help="Disable checkpoint saving for all runs (saves disk space)")
     return p.parse_args()
 
 
@@ -326,8 +336,18 @@ def main() -> None:
         extra_base["max_new_tokens"] = args.max_new_tokens
     if args.val_size:
         extra_base["val_size"] = args.val_size
+    if args.val_every:
+        extra_base["val_every"] = args.val_every
+    if args.no_save:
+        extra_base["no_save"] = True
+    if args.variant:
+        extra_base["variant"] = args.variant
 
-    # Patch task_confirm variants with calibrated HPs if provided
+    # Apply calibrated HPs globally and patch task_confirm variants
+    if args.best_sigma is not None:
+        extra_base["sigma"] = args.best_sigma
+    if args.best_lr is not None:
+        extra_base["lr"] = args.best_lr
     if args.best_sigma is not None or args.best_lr is not None:
         patch: dict = {}
         if args.best_sigma is not None:
@@ -335,7 +355,7 @@ def main() -> None:
         if args.best_lr is not None:
             patch["lr"] = args.best_lr
         BLOCKS["task_confirm"]["variants"] = [{**BLOCKS["task_confirm"]["variants"][0], **patch}]
-        print(f"[task_confirm] Using calibrated HPs: {patch}")
+        print(f"[calibrated HPs applied globally] sigma={args.best_sigma}  lr={args.best_lr}")
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     blocks_to_run = list(BLOCKS.keys()) if args.block == "all" else [args.block]
