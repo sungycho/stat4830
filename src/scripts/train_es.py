@@ -160,8 +160,10 @@ def parse_args():
                    help="Output dir (default: results/<task>_<timestamp>)")
     p.add_argument("--resume-from",      type=str,   default=None,
                    help="Path to a checkpoint (.pt) to load weights from before training")
-    p.add_argument("--no-save",          action="store_true", default=False,
-                   help="Disable checkpoint saving (saves disk space during sweeps)")
+    p.add_argument("--no-save",          action="store_true", default=True,
+                   help="Disable checkpoint saving (default: True; use --save to enable)")
+    p.add_argument("--save",             action="store_false", dest="no_save",
+                   help="Enable checkpoint saving")
     p.add_argument("--perturb-verbose",  action="store_true", default=False,
                    help="Print per-layer progress during perturbation (default off on GPU)")
     # ES variant flags
