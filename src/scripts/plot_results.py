@@ -9,6 +9,12 @@ Usage:
 
   # Compare multiple blocks
   uv run python -m src.scripts.plot_results --exp-dir results/exp_all_20240301/ --recursive
+
+  # Single train_es run: log.jsonl directly in the run folder (no variant subfolders)
+  uv run python -m src.scripts.plot_results --exp-dir results/sst2_20260411_003301
+  # Prepend baseline as first point (x=0) when present in log; override or skip:
+  uv run python -m src.scripts.plot_results --exp-dir results/exp_run/ --baseline 0.55
+  uv run python -m src.scripts.plot_results --exp-dir results/exp_run/ --no-baseline
 """
 from __future__ import annotations
 
@@ -46,6 +52,23 @@ def extract_curve(entries: list[dict]) -> tuple[list[int], list[float]]:
                 fwds.append(x)
                 accs.append(e["val_acc"])
     return fwds, accs
+
+
+def extract_baseline(entries: list[dict]) -> float | None:
+    """Return pre-training val_acc from a baseline event, if present."""
+    for e in entries:
+        if e.get("event") == "baseline" and "val_acc" in e:
+            return float(e["val_acc"])
+    return None
+
+
+def baseline_for_variant(variant_dir: Path) -> float | None:
+    """Read baseline val_acc from the first log in this variant that defines it."""
+    for log_path in find_seed_logs(variant_dir):
+        b = extract_baseline(load_log(log_path))
+        if b is not None:
+            return b
+    return None
 
 
 def find_seed_logs(variant_dir: Path) -> list[Path]:
@@ -96,28 +119,53 @@ def collect_variant_curves(variant_dir: Path) -> tuple[list[int], list[float], l
     return grid.tolist(), interpolated.mean(axis=0).tolist(), interpolated.std(axis=0).tolist()
 
 
-def plot_block(exp_dir: Path, out_path: Path, title: str | None = None,
-               baseline: float | None = None) -> None:
-    """Plot all variants inside exp_dir as separate lines."""
-    variant_dirs = sorted(
+def _variant_dirs_for_plot(exp_dir: Path) -> list[tuple[Path, str]]:
+    """Return (dir, legend_label) for each curve.
+
+    Block layout: each immediate subdirectory is a variant (may contain seed*/log.jsonl).
+    Flat layout: log.jsonl or seed*/log.jsonl lives directly under exp_dir (typical train_es output).
+    """
+    subdirs = sorted(
         d for d in exp_dir.iterdir()
         if d.is_dir() and not d.name.startswith(".")
     )
+    if subdirs:
+        return [(d, d.name) for d in subdirs]
+    if find_seed_logs(exp_dir):
+        return [(exp_dir, exp_dir.name)]
+    return []
+
+
+def plot_block(exp_dir: Path, out_path: Path, title: str | None = None,
+               baseline_override: float | None = None,
+               show_baseline: bool = True) -> None:
+    """Plot all variants inside exp_dir as separate lines.
+
+    When show_baseline is True and baseline_override is None, reads baseline val_acc
+    from each log.jsonl (event \"baseline\"). If baseline_override is set, uses that
+    value for every variant. The baseline is prepended as the first point on the same
+    curve at x=0 (same marker style as validation points).
+    """
+    variants = _variant_dirs_for_plot(exp_dir)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     plotted = 0
-    for vdir in variant_dirs:
+    for vdir, label in variants:
         fwds, means, stds = collect_variant_curves(vdir)
         if not fwds:
             continue
         fwds_k = [f / 1000 for f in fwds]
-        if baseline is not None:
-            fwds_k = [0.0] + fwds_k
-            means   = [baseline] + list(means)
-            stds    = [0.0]      + list(stds)
-        line, = ax.plot(fwds_k, means, marker="o", markersize=3, label=vdir.name)
-        stds_arr = np.array(stds)
-        means_arr = np.array(means)
+        means_l = list(means)
+        stds_l = list(stds)
+        if show_baseline:
+            b = baseline_override if baseline_override is not None else baseline_for_variant(vdir)
+            if b is not None:
+                fwds_k = [0.0] + fwds_k
+                means_l = [b] + means_l
+                stds_l = [0.0] + stds_l
+        line, = ax.plot(fwds_k, means_l, marker="o", markersize=3, label=label)
+        stds_arr = np.array(stds_l)
+        means_arr = np.array(means_l)
         ax.fill_between(fwds_k, means_arr - stds_arr, means_arr + stds_arr,
                         alpha=0.2, color=line.get_color())
         plotted += 1
@@ -213,7 +261,10 @@ def parse_args():
     p.add_argument("--heatmap",  action="store_true",
                    help="Also produce calibration heatmap if summary.json exists")
     p.add_argument("--baseline", type=float, default=None,
-                   help="Draw a horizontal dashed line at this val_acc (zero-shot baseline)")
+                   help="Override baseline val_acc for all variants; if omitted, read "
+                        "from log.jsonl (event baseline) and prepend as first point at x=0")
+    p.add_argument("--no-baseline", action="store_true",
+                   help="Do not prepend baseline (ignore log and --baseline)")
     return p.parse_args()
 
 
@@ -221,16 +272,25 @@ def main() -> None:
     args = parse_args()
     exp_dir = Path(args.exp_dir)
 
+    show_bl = not args.no_baseline
     if args.recursive:
         # Each subdirectory is a block
         for block_dir in sorted(d for d in exp_dir.iterdir() if d.is_dir()):
             out = block_dir / "fig.png"
-            plot_block(block_dir, out, title=block_dir.name, baseline=args.baseline)
+            plot_block(
+                block_dir, out, title=block_dir.name,
+                baseline_override=args.baseline if show_bl else None,
+                show_baseline=show_bl,
+            )
             if args.heatmap:
                 plot_calibration_heatmap(block_dir, block_dir / "calibration_heatmap.png")
     else:
         out = Path(args.out) if args.out else exp_dir / "fig.png"
-        plot_block(exp_dir, out, title=args.title, baseline=args.baseline)
+        plot_block(
+            exp_dir, out, title=args.title,
+            baseline_override=args.baseline if show_bl else None,
+            show_baseline=show_bl,
+        )
         if args.heatmap:
             plot_calibration_heatmap(exp_dir, exp_dir / "calibration_heatmap.png")
 
