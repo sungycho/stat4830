@@ -17,7 +17,7 @@ from __future__ import annotations
 import torch
 
 # Set to False to suppress per-layer progress prints (recommended on GPU).
-VERBOSE: bool = True
+VERBOSE: bool = False
 
 
 def _es_params(model):

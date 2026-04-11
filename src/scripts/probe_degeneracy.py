@@ -74,6 +74,8 @@ def run_probe(args):
 
     n_degenerate = 0
     advantages = []
+    r_plus_list = []
+    r_minus_list = []
 
     for k in range(args.K):
         # Sample a fresh mini-batch
@@ -96,11 +98,13 @@ def run_probe(args):
 
         advantage = r_plus - r_minus
         advantages.append(advantage)
+        r_plus_list.append(r_plus)
+        r_minus_list.append(r_minus)
 
         if advantage == 0.0:
             n_degenerate += 1
 
-        if (k + 1) % 50 == 0:
+        if (k + 1) % 10 == 0:
             p_so_far = n_degenerate / (k + 1)
             print(f"  [{k+1:4d}/{args.K}]  P(A=0) so far = {p_so_far:.3f}  "
                   f"(degenerate: {n_degenerate}/{k+1})")
@@ -130,9 +134,22 @@ def run_probe(args):
     # score is +1 or -1; convert to 0/1
     p0 = sum(1 for s in base_scores if s > 0) / len(base_scores)
 
-    # Theoretical P(A=0) from normal approximation
+    # Theoretical P(A=0) from normal approximation (2pi formula, rho=0.5 assumption)
     denom = 2 * math.pi * args.batch_size * p0 * (1 - p0)
     p_theoretical = 1.0 / math.sqrt(denom) if denom > 0 else float("nan")
+
+    # Empirical rho: Pearson correlation between r+ and r- across K pairs
+    n = len(r_plus_list)
+    mean_plus = sum(r_plus_list) / n
+    mean_minus = sum(r_minus_list) / n
+    cov = sum((r_plus_list[i] - mean_plus) * (r_minus_list[i] - mean_minus) for i in range(n)) / n
+    var_plus = sum((x - mean_plus) ** 2 for x in r_plus_list) / n
+    var_minus = sum((x - mean_minus) ** 2 for x in r_minus_list) / n
+    rho_empirical = cov / math.sqrt(var_plus * var_minus) if var_plus > 0 and var_minus > 0 else float("nan")
+
+    # Theoretical P(A=0) using general formula with empirical rho
+    denom_rho = 4 * math.pi * args.batch_size * p0 * (1 - p0) * (1 - rho_empirical)
+    p_theoretical_rho = 1.0 / math.sqrt(denom_rho) if denom_rho > 0 else float("nan")
 
     # --- report ---
     print("\n" + "=" * 60)
@@ -147,7 +164,11 @@ def run_probe(args):
     print(f"  Base accuracy p0:  {p0:.3f}")
     print(f"  P(A=0) empirical:  {p_degenerate:.3f}")
     print(f"  P(A=0) theory:     {p_theoretical:.3f}  "
-          f"[formula: 1/sqrt(2*pi*B*p0*(1-p0))]")
+          f"[formula: 1/sqrt(2*pi*B*p0*(1-p0)), assumes rho=0.5]")
+    print(f"  rho empirical:     {rho_empirical:.3f}  "
+          f"[Corr(r+, r-) across {args.K} pairs]")
+    print(f"  P(A=0) theory(rho):{p_theoretical_rho:.3f}  "
+          f"[formula: 1/sqrt(4*pi*B*p0*(1-p0)*(1-rho))]")
     print()
     print(f"  Advantage stats:")
     nonzero = [a for a in advantages if a != 0.0]
@@ -172,13 +193,17 @@ def run_probe(args):
         "p0_empirical": p0,
         "p_degenerate_empirical": p_degenerate,
         "p_degenerate_theoretical": p_theoretical,
+        "p_degenerate_theoretical_rho": p_theoretical_rho,
+        "rho_empirical": rho_empirical,
         "n_degenerate": n_degenerate,
         "nmin_table": {str(k): v for k, v in nmin_table.items()},
         "advantages": advantages,
+        "r_plus": r_plus_list,
+        "r_minus": r_minus_list,
     }
 
     out_path = Path(args.output) if args.output else Path(
-        f"results/probe_{args.task}_{args.model.replace('/', '_')}_sigma{args.sigma}_K{args.K}.json"
+        f"results/probe_{args.task}_{args.model.replace('/', '_')}_sigma{args.sigma}_K{args.K}_B{args.batch_size}.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
