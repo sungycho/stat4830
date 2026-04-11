@@ -58,6 +58,7 @@ def run_probe(args):
 
     # --- load model ---
     backend = create_backend(
+        "hf",
         model_name=args.model,
         device=args.device,
         dtype=args.dtype,
