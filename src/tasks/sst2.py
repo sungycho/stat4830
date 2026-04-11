@@ -7,6 +7,11 @@ _POS = re.compile(r"\bpositive\b", re.IGNORECASE)
 _NEG = re.compile(r"\bnegative\b", re.IGNORECASE)
 _LABEL_MAP = {0: "negative", 1: "positive"}
 
+_GREAT = re.compile(r"\bgreat\b", re.IGNORECASE)
+_TERRIBLE = re.compile(r"\bterrible\b", re.IGNORECASE)
+# MeZO: label 1=positive→"great", label 0=negative→"terrible"
+_MEZO_LABEL_MAP = {0: "terrible", 1: "great"}
+
 
 @register("sst2")
 class Sst2Task(Task):
@@ -53,6 +58,31 @@ class Sst2Task(Task):
         else:
             return -1.0
         return 1.0 if pred == _LABEL_MAP[example["label"]] else -1.0
+
+
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): "<text> It was" → model completes with "great"/"terrible"
+        return f'{example["sentence"]} It was'
+
+    def label_words_mezo(self):
+        return ["great", "terrible"]
+
+    def score_mezo(self, text, example):
+        great = _GREAT.search(text)
+        terrible = _TERRIBLE.search(text)
+        if great and terrible:
+            pred = 1 if great.start() < terrible.start() else 0
+        elif great:
+            pred = 1
+        elif terrible:
+            pred = 0
+        else:
+            return -1.0
+        return 1.0 if pred == example["label"] else -1.0
+
+    def score_ce_mezo(self, log_probs, example):
+        correct = _MEZO_LABEL_MAP[example["label"]]
+        return log_probs[correct]
 
 
 def _to_list(split):

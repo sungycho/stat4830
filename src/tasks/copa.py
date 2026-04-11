@@ -66,5 +66,18 @@ class CopaTask(Task):
         return 1.0 if pred == example["label"] else -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): "<premise> so/because <candidate>" with per-candidate
+        # log-likelihood scoring. Here we approximate with a generation prompt since
+        # our framework doesn't yet support full-sentence log-likelihood comparison.
+        connector = "so" if example["question"] == "effect" else "because"
+        premise = example["premise"].rstrip(".")
+        return (
+            f'{premise} {connector} {example["choice1"]}, or '
+            f'{premise} {connector} {example["choice2"]}? '
+            f'Which is more likely: 1 or 2?'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

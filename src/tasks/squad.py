@@ -67,5 +67,18 @@ class SquadTask(Task):
         return -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): Title / Context / Question / Answer:
+        ctx = example["context"][:_CONTEXT_MAX_CHARS]
+        if len(example["context"]) > _CONTEXT_MAX_CHARS:
+            ctx += "..."
+        return (
+            f'Title: {example["title"]}\n'
+            f'Context: {ctx}\n'
+            f'Question: {example["question"]}\n'
+            f'Answer:'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

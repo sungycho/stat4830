@@ -56,19 +56,22 @@ def _classify_output(text: str, example: dict) -> str:
 
 
 def decomp_eval(backend, val_data: list[dict], task, batch_size: int,
-                base_categories: list[str] | None) -> dict:
+                base_categories: list[str] | None,
+                prompt_style: str = "default") -> dict:
     """Run full per-example decomposition eval over val_data.
 
     Returns aggregate counts and per-example categories.
     base_categories: list of 'correct'/'wrong_answer'/'format_error' from base model run,
                      indexed identically to val_data. If None, skips decomposition counts.
     """
+    prompt_fn = _prompt_fn(task, backend, prompt_style)
+    raw = task.prefer_base_prompt or prompt_style == "mezo"
     categories = []
     predictions = []  # "yes", "no", "format_error"
     for i in range(0, len(val_data), batch_size):
         chunk   = val_data[i : i + batch_size]
-        prompts = [task.build_prompt(ex) for ex in chunk]
-        outputs = backend.generate_batch(prompts)
+        prompts = [prompt_fn(ex) for ex in chunk]
+        outputs = backend.generate_batch(prompts, raw=raw)
         for ex, out in zip(chunk, outputs):
             categories.append(_classify_output(out, ex))
             yes = _YES_RE.search(out)
@@ -172,6 +175,11 @@ def parse_args():
                    help="Disable z-score reward normalisation in gradient update")
     p.add_argument("--top-k",            type=int,   default=0,
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
+    # prompt style
+    p.add_argument("--prompt-style", default="default", choices=["default", "mezo"],
+                   help="Prompt template style. 'mezo' uses exact templates from the MeZO paper "
+                        "(2305.17333, Appendix Table 14). Note: SST-2 and CB use different label "
+                        "words under 'mezo' (great/terrible and Yes/No/Maybe respectively).")
     # reward model
     p.add_argument("--reward", default="accuracy", choices=["accuracy", "ce"],
                    help="Training reward signal. 'accuracy': binary +1/-1 (default). "
@@ -221,38 +229,95 @@ def load_run_state(checkpoint_path: str) -> dict:
     return {}
 
 
-def eval_batch(backend, examples: list[dict], task) -> float:
-    """Evaluate a mini-batch using binary accuracy reward (+1/-1 per sample)."""
-    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+def _prompt_fn(task, backend, prompt_style: str = "default"):
+    """Select prompt builder based on prompt_style and backend capabilities."""
+    if prompt_style == "mezo":
+        return task.build_prompt_mezo
+    if task.prefer_base_prompt:
+        return task.build_prompt_base
+    return task.build_prompt if backend.is_instruct else task.build_prompt_base
+
+
+def _score_fn(task, prompt_style: str):
+    """Select the score function matching the active prompt style."""
+    return task.score_mezo if prompt_style == "mezo" else task.score
+
+
+def _label_words(task, prompt_style: str):
+    """Select label words matching the active prompt style."""
+    return task.label_words_mezo() if prompt_style == "mezo" else task.label_words()
+
+
+def eval_batch(backend, examples: list[dict], task, prompt_style: str = "default") -> float:
+    """Evaluate a mini-batch using task.reward() as the training signal.
+
+    For the default prompt style, delegates to task.reward() so tasks with
+    custom composite rewards (e.g. countdown's format+answer signal) are
+    preserved. For MeZO style, maps score_mezo > 0 to binary {0, 1} because
+    score_mezo is always ±1 (no composite extension defined for MeZO).
+    """
+    prompt_fn = _prompt_fn(task, backend, prompt_style)
+    raw = task.prefer_base_prompt or prompt_style == "mezo"
     prompts = [prompt_fn(ex) for ex in examples]
-    outputs = backend.generate_batch(prompts)
-    rewards = [task.score(text, ex) for text, ex in zip(outputs, examples)]
+    outputs = backend.generate_batch(prompts, raw=raw)
+    if prompt_style == "mezo":
+        score_fn = task.score_mezo
+        rewards = [1.0 if score_fn(text, ex) > 0 else 0.0 for text, ex in zip(outputs, examples)]
+    else:
+        rewards = [task.reward(text, ex) for text, ex in zip(outputs, examples)]
     return sum(rewards) / len(rewards)
 
 
-def eval_batch_ce(backend, examples: list[dict], task) -> float:
+def _score_ce_fn(task, prompt_style: str):
+    """Select the CE score function matching the active prompt style."""
+    return task.score_ce_mezo if prompt_style == "mezo" else task.score_ce
+
+
+def eval_batch_ce(backend, examples: list[dict], task, prompt_style: str = "default") -> float:
     """Evaluate a mini-batch using CE reward (restricted log-softmax over label words).
 
     Single forward pass only — no generation needed. Returns mean log P(correct | prompt)
     over the batch, where the log-prob is restricted/normalized over label_words().
     Range: (-inf, 0], where 0 means the model is certain about every correct label.
     """
-    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+    prompt_fn = _prompt_fn(task, backend, prompt_style)
+    raw = task.prefer_base_prompt or prompt_style == "mezo"
     prompts = [prompt_fn(ex) for ex in examples]
-    log_probs_list = backend.score_logprobs_batch(prompts, task.label_words())
-    rewards = [task.score_ce(lp, ex) for lp, ex in zip(log_probs_list, examples)]
+    lw = _label_words(task, prompt_style)
+    log_probs_list = backend.score_logprobs_batch(prompts, lw, raw=raw)
+    score_ce_fn = _score_ce_fn(task, prompt_style)
+    rewards = [score_ce_fn(lp, ex) for lp, ex in zip(log_probs_list, examples)]
     return sum(rewards) / len(rewards)
 
 
-def validate(backend, val_data: list[dict], task, batch_size: int = 16) -> float:
-    """Validate over the full val set, chunked into batched forward passes."""
-    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+def validate(backend, val_data: list[dict], task, batch_size: int = 16,
+             prompt_style: str = "default", reward: str = "accuracy") -> float:
+    """Validate over the full val set, chunked into batched forward passes.
+
+    When reward='ce' and the task has label words, uses log-likelihood argmax for
+    accuracy (matching the paper's evaluation strategy for classification tasks).
+    Otherwise falls back to generation + regex scoring.
+    """
+    prompt_fn = _prompt_fn(task, backend, prompt_style)
+    raw = task.prefer_base_prompt or prompt_style == "mezo"
+    lw = _label_words(task, prompt_style)
+    use_ce_eval = reward == "ce" and lw is not None
+
     correct = 0
     for i in range(0, len(val_data), batch_size):
         chunk = val_data[i:i + batch_size]
         prompts = [prompt_fn(ex) for ex in chunk]
-        outputs = backend.generate_batch(prompts)
-        correct += sum(task.score(text, ex) > 0 for text, ex in zip(outputs, chunk))
+        if use_ce_eval:
+            log_probs_list = backend.score_logprobs_batch(prompts, lw, raw=raw)
+            score_ce_fn = _score_ce_fn(task, prompt_style)
+            for lp, ex in zip(log_probs_list, chunk):
+                correct_lp = score_ce_fn(lp, ex)
+                if correct_lp >= max(lp.values()) - 1e-9:
+                    correct += 1
+        else:
+            score_fn = _score_fn(task, prompt_style)
+            outputs = backend.generate_batch(prompts, raw=raw)
+            correct += sum(score_fn(text, ex) > 0 for text, ex in zip(outputs, chunk))
     return correct / len(val_data)
 
 
@@ -267,7 +332,9 @@ def run_es_iteration(
     seeds, advantages = [], []
     fwd_passes = 0
 
-    _eval = eval_batch_ce if args.reward == "ce" else eval_batch
+    ps = args.prompt_style
+    _eval = (lambda b, ex, t: eval_batch_ce(b, ex, t, ps)) if args.reward == "ce" \
+            else (lambda b, ex, t: eval_batch(b, ex, t, ps))
     nt = args.noise_type
     for _ in range(args.population_size):
         seed = random.randint(0, 2**31)
@@ -366,10 +433,11 @@ def main() -> None:
         f"sigma={args.sigma}  lr={args.lr}\n"
         f"noise={args.noise_type}  one_sided={args.one_sided}  "
         f"normalize={normalize}  top_k={args.top_k}\n"
-        f"reward={args.reward}  train={len(train_data)}  val={len(val_data)}"
+        f"reward={args.reward}  train={len(train_data)}  val={len(val_data)}\n"
+        f"no_save={args.no_save}  prompt_style={args.prompt_style}"
     )
 
-    baseline_acc = validate(backend, val_data, task, batch_size=args.batch_size)  # chunked batched eval
+    baseline_acc = validate(backend, val_data, task, batch_size=args.batch_size, prompt_style=args.prompt_style, reward=args.reward)
     print(f"Baseline val_acc: {baseline_acc:.3f} ({int(baseline_acc * len(val_data))}/{len(val_data)})")
     log_entry(log_path, {"event": "baseline", "val_acc": baseline_acc})
 
@@ -431,7 +499,7 @@ def main() -> None:
 
         if (iteration + 1) % args.val_every == 0:
             if args.track_decomposition:
-                decomp = decomp_eval(backend, val_data, task, args.batch_size, base_categories)
+                decomp = decomp_eval(backend, val_data, task, args.batch_size, base_categories, prompt_style=args.prompt_style)
                 val_acc = decomp["val_acc"]
                 cumulative_total_fwd += len(val_data)
                 decomp_entry = {
@@ -448,7 +516,7 @@ def main() -> None:
                 )
                 print(f"  [decomp] {decomp_summary}")
             else:
-                val_acc = validate(backend, val_data, task, batch_size=args.batch_size)
+                val_acc = validate(backend, val_data, task, batch_size=args.batch_size, prompt_style=args.prompt_style, reward=args.reward)
                 cumulative_total_fwd += len(val_data)
 
             entry["val_acc"] = val_acc

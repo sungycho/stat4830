@@ -62,6 +62,7 @@ MODEL_REGISTRY: dict[str, str] = {
     # Phi
     "phi-2":           "microsoft/phi-2",
     # Qwen 2.5 Instruct
+    "qwen-0.5b":        "Qwen/Qwen2.5-0.5B-Instruct",
     "qwen-1.5b":       "Qwen/Qwen2.5-1.5B-Instruct",
     "qwen-3b":         "Qwen/Qwen2.5-3B-Instruct",
     "qwen-7b":         "Qwen/Qwen2.5-7B-Instruct",
@@ -95,19 +96,32 @@ _DEFAULT_MAX_TOKENS = 8
 # ------------------------------------------------------------------
 def evaluate(
     backend, val_data: list[dict], task, batch_size: int,
+    prompt_style: str = "default",
 ) -> dict:
     """Run zero-shot eval and return detailed results."""
     correct = 0
     total = len(val_data)
     parse_failures = 0
 
-    prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+    if prompt_style == "mezo":
+        prompt_fn = task.build_prompt_mezo
+        score_fn = task.score_mezo
+        raw = True
+    elif task.prefer_base_prompt:
+        prompt_fn = task.build_prompt_base
+        score_fn = task.score
+        raw = True
+    else:
+        prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
+        score_fn = task.score
+        raw = False
+
     for i in range(0, total, batch_size):
         chunk = val_data[i:i + batch_size]
         prompts = [prompt_fn(ex) for ex in chunk]
-        outputs = backend.generate_batch(prompts)
+        outputs = backend.generate_batch(prompts, raw=raw)
         for text, ex in zip(outputs, chunk):
-            score = task.score(text, ex)
+            score = score_fn(text, ex)
             if score > 0:
                 correct += 1
             elif score < -0.5:
@@ -172,6 +186,9 @@ def parse_args():
     )
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--prompt-style", default="default", choices=["default", "mezo"],
+                   help="Prompt template style. 'mezo' uses exact templates from the MeZO paper "
+                        "(2305.17333, Appendix Table 14).")
     p.add_argument(
         "--out-dir", default=None,
         help="Output dir (default: results/baseline_zeroshot_<ts>)",
@@ -357,6 +374,7 @@ def main() -> None:
                 t_eval = time.perf_counter()
                 eval_result = evaluate(
                     backend, val_data, task, args.batch_size,
+                    prompt_style=args.prompt_style,
                 )
                 eval_time = time.perf_counter() - t_eval
 

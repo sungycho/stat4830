@@ -41,6 +41,22 @@ class Task(ABC):
         """Score one model generation. Return +1.0 correct, -1.0 wrong/unparseable."""
         ...
 
+    @property
+    def prefer_base_prompt(self) -> bool:
+        """If True, always use build_prompt_base() regardless of backend.is_instruct.
+
+        Override to True in tasks that pre-format their own prompts (e.g. countdown),
+        where applying a chat template on top would break the prompt structure.
+        """
+        return False
+
+    def reward(self, text: str, example: dict) -> float:
+        """Training reward signal. Defaults to remapping score() {-1,+1} → {0,1}.
+
+        Override in tasks that need a richer reward (e.g. partial credit for format).
+        """
+        return 1.0 if self.score(text, example) > 0 else 0.0
+
     def label_words(self) -> list[str] | None:
         """Return label words for CE scoring (e.g. ['yes', 'no']).
 
@@ -59,6 +75,41 @@ class Task(ABC):
         Only called when label_words() is not None.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement score_ce")
+
+    def build_prompt_mezo(self, example: dict) -> str:
+        """MeZO-style completion prompt (paper 2305.17333, Appendix Table 14).
+
+        Defaults to build_prompt_base so tasks without an override fall back gracefully.
+        Override in subclasses to use the exact template from the MeZO paper.
+        """
+        return self.build_prompt_base(example)
+
+    def label_words_mezo(self) -> list[str] | None:
+        """Label words for CE scoring under the MeZO prompt style.
+
+        Some tasks use different label words in MeZO prompts (e.g. SST-2 uses
+        'great'/'terrible' instead of 'positive'/'negative'; CB uses 'Yes'/'No'/'Maybe').
+        Defaults to label_words() for tasks where the labels are unchanged.
+        """
+        return self.label_words()
+
+    def score_mezo(self, text: str, example: dict) -> float:
+        """Score generated text when using MeZO-style prompts.
+
+        Defaults to score() for tasks where labels are unchanged.
+        Override in tasks where MeZO prompts elicit different label words
+        (e.g. SST-2 expects 'great'/'terrible', CB expects 'Yes'/'No'/'Maybe').
+        """
+        return self.score(text, example)
+
+    def score_ce_mezo(self, log_probs: dict[str, float], example: dict) -> float:
+        """CE score using restricted log-probs under the MeZO prompt style.
+
+        Returns the log-prob of the correct label word from label_words_mezo().
+        Defaults to score_ce() for tasks where MeZO label words are unchanged.
+        Override in tasks that use different label words (SST-2, CB already do).
+        """
+        return self.score_ce(log_probs, example)
 
 
 def register(name: str):

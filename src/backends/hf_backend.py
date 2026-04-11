@@ -41,9 +41,13 @@ class HFBackend:
         self.model.eval()
 
     @torch.no_grad()
-    def generate_batch(self, prompts: list[str]) -> list[str]:
-        """Tokenize all prompts together and run a single batched forward pass."""
-        if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
+    def generate_batch(self, prompts: list[str], raw: bool = False) -> list[str]:
+        """Tokenize all prompts together and run a single batched forward pass.
+
+        raw=True: skip chat-template formatting and tokenize prompts as-is.
+        Use this when prompts are already fully formatted (e.g. countdown context strings).
+        """
+        if not raw and hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
             formatted = [
                 self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": p}],
@@ -55,11 +59,15 @@ class HFBackend:
         else:
             formatted = prompts
 
+        max_len = getattr(self.tokenizer, "model_max_length", None)
+        if max_len is not None and max_len > 1_000_000:
+            max_len = None  # sentencepiece models report absurdly large limits
         inputs = self.tokenizer(
             formatted,
             return_tensors="pt",
             padding=True,
-            truncation=True,
+            truncation=max_len is not None,
+            max_length=max_len,
         ).to(self.device)
 
         input_len = inputs["input_ids"].shape[1]
@@ -87,7 +95,7 @@ class HFBackend:
 
     @torch.no_grad()
     def score_logprobs_batch(
-        self, prompts: list[str], label_words: list[str]
+        self, prompts: list[str], label_words: list[str], raw: bool = False
     ) -> list[dict[str, float]]:
         """Single forward pass (no generation). Returns restricted log-softmax over
         label_words for each prompt: {word: log P(word | prompt, label_set)}.
@@ -95,6 +103,9 @@ class HFBackend:
         Each label word is represented by its first subword token as it would
         appear mid-sequence (encoded with a leading space). Multi-token label
         words are approximated by their first token only.
+
+        raw=True: skip chat-template formatting (mirrors generate_batch behaviour).
+        Use for base-model completion prompts (e.g. MeZO-style templates).
         """
         # Get the first token ID for each label word as it appears mid-sequence.
         label_token_ids: dict[str, int] = {}
@@ -103,7 +114,7 @@ class HFBackend:
             label_token_ids[word] = ids[0]
 
         # Apply chat template if needed (same as generate_batch).
-        if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
+        if not raw and hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template:
             formatted = [
                 self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": p}],
@@ -115,11 +126,15 @@ class HFBackend:
         else:
             formatted = prompts
 
+        max_len = getattr(self.tokenizer, "model_max_length", None)
+        if max_len is not None and max_len > 1_000_000:
+            max_len = None  # sentencepiece models report absurdly large limits
         inputs = self.tokenizer(
             formatted,
             return_tensors="pt",
             padding=True,
-            truncation=True,
+            truncation=max_len is not None,
+            max_length=max_len,
         ).to(self.device)
 
         outputs = self.model(**inputs)

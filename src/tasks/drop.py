@@ -67,5 +67,17 @@ class DropTask(Task):
         return -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): "Passage: <context>\nQuestion: <question>\nAnswer:"
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return (
+            f'Passage: {passage}\n'
+            f'Question: {example["question"]}\n'
+            f'Answer:'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

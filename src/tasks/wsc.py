@@ -65,5 +65,14 @@ class WscTask(Task):
         return 1.0 if pred == example["label"] else -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): span2 quoted, span1 unquoted
+        return (
+            f'{example["text"]}\n'
+            f'In the previous sentence, does the pronoun "{example["span2_text"]}" '
+            f'refer to {example["span1_text"]}? Yes or No?'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

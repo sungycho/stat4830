@@ -55,5 +55,18 @@ class RecordTask(Task):
         return -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): passage then query with @placeholder for candidates.
+        # The paper uses per-candidate scoring; we approximate with generation here.
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return (
+            f'{passage}\n'
+            f'{example["query"]}\n'
+            f'What entity replaces @placeholder?'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

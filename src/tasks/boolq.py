@@ -67,5 +67,13 @@ class BoolqTask(Task):
         return 1.0 if pred == example["label"] else -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): "<passage> <question>?" — no structural labels
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        if len(example["passage"]) > _PASSAGE_MAX_CHARS:
+            passage += "..."
+        return f'{passage} {example["question"]}?'
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

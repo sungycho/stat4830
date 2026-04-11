@@ -121,6 +121,40 @@ BLOCKS: dict[str, dict] = {
               for n in [4, 8, 16, 32]],
         ],
     },
+    "mezo_pop_scaling": {
+        "description": "MeZO: population size N ∈ {1,2,4,8} at fixed 20K-step budget",
+        # Replicates MeZO paper (2305.17333) §3.2 + Appendix A on OPT-13B SST-2.
+        # Paper hyperparameters: sigma=1e-3, lr=1e-6, train_size=1000, val_size=500,
+        # 20K steps at n=1 (Algorithm 1). Appendix A ablations fix forward passes to
+        # 10K; their Table 6 shows n=1/4/16 all within 1% at fixed forward-pass budget.
+        #
+        # Budget: 20K steps × 2 sides × batch=16 = 640K fwd passes for N=1.
+        # Each variant is budget-matched so all consume 640K training forward passes.
+        # val_every gives ~10 validation checkpoints per run.
+        "base_overrides": {
+            "task": "sst2",
+            "model": "facebook/opt-13b",
+            "train_size": 1000,
+            "val_size": 500,
+            "batch_size": 16,
+            "sigma": 1e-3,
+            "lr": 1e-6,
+            "prompt_style": "mezo",
+            "reward": "ce",
+            "no_normalize": True,
+            "no_save": True,
+        },
+        "variants": [
+            {
+                "population_size": n,
+                # 640K fwd / (n * 2 sides * 16 batch) = iters to match 20K-step budget
+                "num_iters": max(2, math.ceil(640_000 / (n * 2 * 16))),
+                "val_every": max(1, math.ceil(max(2, math.ceil(640_000 / (n * 2 * 16))) / 10)),
+                "label": f"N{n}",
+            }
+            for n in [1, 2, 4, 8]
+        ],
+    },
     "task_confirm": {
         "description": "Best calibrated config confirmed on BoolQ (set --best-sigma/--best-lr)",
         "base_overrides": {"task": "boolq", "val_size": 500},
@@ -154,6 +188,8 @@ _ARG_MAP = {
     "noise_type":      "--noise-type",
     "top_k":           "--top-k",
     "max_new_tokens":  "--max-new-tokens",
+    "prompt_style":    "--prompt-style",
+    "reward":          "--reward",
 }
 
 

@@ -69,5 +69,15 @@ class WicTask(Task):
         return 1.0 if pred == example["label"] else -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): question first, then both sentences
+        return (
+            f'Does the word "{example["word"]}" have the same meaning in these two sentences? '
+            f'Yes, No?\n'
+            f'{example["sentence1"]}\n'
+            f'{example["sentence2"]}'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

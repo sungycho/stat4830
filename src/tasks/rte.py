@@ -60,5 +60,13 @@ class RteTask(Task):
         return 1.0 if pred == example["label"] else -1.0
 
 
+    def build_prompt_mezo(self, example):
+        # MeZO paper (Table 14): premise then yes/no question with hypothesis in quotes
+        return (
+            f'{example["sentence1"]}\n'
+            f'Does this mean that "{example["sentence2"]}" is true? Yes or No?'
+        )
+
+
 def _to_list(split):
     return [dict(ex) for ex in split]

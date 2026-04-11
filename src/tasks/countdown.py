@@ -1,17 +1,25 @@
 """Countdown task — given a set of numbers and a target, find an arithmetic
-expression using those numbers (each at most once) that equals the target.
+expression using those numbers (each exactly once) that equals the target.
 
-Dataset: Jiayi-Pan/Countdown-Tasks-3to4 (HuggingFace)
-Scoring: +1 if the model's expression evaluates to the target using only the
-         given numbers, -1 otherwise.
+Dataset: src/tasks/data/countdown.json (2200 examples from the ES-at-Scale paper).
+Paper split: 200 train / 2000 test.
+
+Scoring:
+  score()  — binary +1.0 / -1.0 for validation accuracy.
+  reward() — composite 0.1 * format_reward + answer_reward (0.0–1.1) for ES
+             training, matching the paper's reward_function() exactly.
 """
 from __future__ import annotations
 
 import ast
+import json
 import operator
 import re
-from datasets import load_dataset
+from pathlib import Path
+
 from src.tasks import Task, register
+
+_DATA_PATH = Path(__file__).parent / "data" / "countdown.json"
 
 _SAFE_OPS = {
     ast.Add:  operator.add,
@@ -20,6 +28,11 @@ _SAFE_OPS = {
     ast.Div:  operator.truediv,
     ast.USub: operator.neg,
 }
+
+_ALLOWED_CHARS = re.compile(r"^[0-9+\-*/() ]+$")
+_ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+_THINK_RE  = re.compile(r"<think>.*?</think>",    re.DOTALL)
+_FULL_RE   = re.compile(r"^<think>.*?</think>\n<answer>.*?</answer>$", re.DOTALL)
 
 
 def _safe_eval(expr: str) -> float | None:
@@ -51,86 +64,115 @@ def _eval_node(node):
     return None
 
 
-def _extract_numbers_used(expr: str) -> list[int]:
-    """Pull out all integer literals from an expression string."""
-    return [int(m) for m in re.findall(r"\b\d+\b", expr)]
+def _answer_reward(expr: str, available: list[int], target: int) -> float:
+    """Returns 1.0 if expr is valid, uses all numbers exactly, and hits target."""
+    if not expr or not _ALLOWED_CHARS.match(expr):
+        return 0.0
+    used = [int(m) for m in re.findall(r"\b\d+\b", expr)]
+    if sorted(used) != sorted(available):
+        return 0.0
+    result = _safe_eval(expr)
+    if result is None:
+        return 0.0
+    return 1.0 if abs(result - target) < 1e-5 else 0.0
 
 
-def _numbers_valid(used: list[int], available: list[int]) -> bool:
-    """Check used numbers are a multiset-subset of available."""
-    avail = list(available)
-    for n in used:
-        if n not in avail:
-            return False
-        avail.remove(n)
-    return True
+def _format_reward(text: str) -> float:
+    """Format reward matching paper's format_reward_function().
 
-
-def _extract_expression(text: str) -> str | None:
-    """Pull the first plausible arithmetic expression from model output."""
-    # Try to find "= <number>" pattern and work backward
-    eq_match = re.search(r"=\s*([\d]+)", text)
-    # Look for lines containing digits and operators
-    for line in text.splitlines():
-        line = line.strip()
-        if re.search(r"\d", line) and re.search(r"[+\-*/]", line):
-            # Strip trailing "= <answer>" if present
-            line = re.sub(r"\s*=\s*[\d]+\s*$", "", line).strip()
-            return line
-    return None
+    The model output is prefixed with '<think>' before checking, because the
+    dataset context already ends with '<think>' and the model continues from there.
+    Full format <think>…</think>\\n<answer>…</answer> → 1.0.
+    Partial: +0.1 for <think> block, +0.5 for <answer> block.
+    """
+    full_text = "<think>" + text
+    if _FULL_RE.match(full_text):
+        return 1.0
+    reward = 0.0
+    if _THINK_RE.search(full_text):
+        reward += 0.1
+    if _ANSWER_RE.search(full_text):
+        reward += 0.5
+    return reward
 
 
 @register("countdown")
 class CountdownTask(Task):
+
+    @property
+    def prefer_base_prompt(self) -> bool:
+        # Always use the raw context prompt; bypass chat-template wrapping.
+        # Matches the paper's completion-mode approach for both base and instruct models.
+        return True
+
     def load_data(self, train_size: int, val_size: int, seed: int):
-        ds = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
-        ds = ds.shuffle(seed=seed)
+        # Dataset has 2200 examples. Paper uses 200 train / 2000 val.
+        with open(_DATA_PATH) as f:
+            data = json.load(f)
         total = train_size + val_size
-        ds = ds.select(range(min(total, len(ds))))
-        train = [dict(ex) for ex in ds.select(range(train_size))]
-        val   = [dict(ex) for ex in ds.select(range(train_size, train_size + val_size))]
+        if total > len(data):
+            raise ValueError(
+                f"Requested {total} examples but countdown.json only has {len(data)}."
+            )
+        # Normalize field name: 'numbers' → 'nums'
+        def _norm(item: dict) -> dict:
+            return {
+                "nums":     item["numbers"],
+                "target":   float(item["target"]),
+                "context":  item["context"],
+                "solution": item.get("solution", ""),
+            }
+        train = [_norm(data[i]) for i in range(train_size)]
+        val   = [_norm(data[i]) for i in range(train_size, train_size + val_size)]
         return train, val
 
-    def build_prompt(self, example: dict) -> str:
-        nums   = example["nums"]
-        target = example["target"]
-        nums_str = ", ".join(str(n) for n in nums)
-        return (
-            f"Using the numbers {nums_str}, create an arithmetic expression "
-            f"(using +, -, *, / and each number at most once) that equals {target}.\n"
-            f"Write only the expression, nothing else."
-        )
-
     def build_prompt_base(self, example: dict) -> str:
+        # Return the pre-formatted prompt from the dataset directly.
+        # It ends with '\n<think>' so the model continues inside the think block.
+        return example["context"]
+
+    def build_prompt(self, example: dict) -> str:
+        # Clean user-message format for chat-template backends.
+        # Not used when prefer_base_prompt is True (which it always is for this task).
         nums   = example["nums"]
         target = example["target"]
-        nums_str = ", ".join(str(n) for n in nums)
+        nums_str = " ".join(str(n) for n in nums)
         return (
-            "Using the numbers 3, 8, 5, create an arithmetic expression "
-            "(using +, -, *, / and each number at most once) that equals 24.\n"
-            "Expression: 3 * 8\n\n"
-            "Using the numbers 2, 7, 9, create an arithmetic expression "
-            "(using +, -, *, / and each number at most once) that equals 18.\n"
-            "Expression: 9 + 7 + 2\n\n"
-            f"Using the numbers {nums_str}, create an arithmetic expression "
-            f"(using +, -, *, / and each number at most once) that equals {target}.\n"
-            "Expression:"
+            f"Using the numbers [{nums_str}], create an equation that equals {target}. "
+            f"You can use basic arithmetic operations (+, -, *, /) and each number can "
+            f"only be used once. Show your work in <think> </think> tags. And return the "
+            f"final answer in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."
         )
 
     def score(self, text: str, example: dict) -> float:
-        target    = int(example["target"])
+        """Binary accuracy: +1.0 if answer is correct, -1.0 otherwise.
+
+        Matches paper's answer_reward_function() strictness:
+        - Must have <answer> tags (no fallback extraction)
+        - Allowed chars only: digits, +, -, *, /, (, ), space
+        - Must use ALL provided numbers exactly (sorted match)
+        """
+        target    = float(example["target"])
         available = [int(n) for n in example["nums"]]
 
-        expr = _extract_expression(text)
-        if expr is None:
+        matches = _ANSWER_RE.findall(text)
+        if not matches:
             return -1.0
+        expr = matches[-1].strip()
 
-        used = _extract_numbers_used(expr)
-        if not _numbers_valid(used, available):
-            return -1.0
+        return 1.0 if _answer_reward(expr, available, target) == 1.0 else -1.0
 
-        result = _safe_eval(expr)
-        if result is None:
-            return -1.0
+    def reward(self, text: str, example: dict) -> float:
+        """Composite training reward matching paper's reward_function().
 
-        return 1.0 if abs(result - target) < 1e-6 else -1.0
+        Total = 0.1 * format_reward + answer_reward, range [0.0, 1.1].
+        """
+        target    = float(example["target"])
+        available = [int(n) for n in example["nums"]]
+
+        fmt = _format_reward(text)
+
+        matches = _ANSWER_RE.findall(text)
+        ans = _answer_reward(matches[-1].strip(), available, target) if matches else 0.0
+
+        return 0.1 * fmt + ans
