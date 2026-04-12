@@ -269,3 +269,12 @@ docs/draft-v1.tex
 docs/draft-v0-04-10.md
 docs/sketch.md
 docs/theory_es_scaling.md
+
+# LaTeX artifacts
+*.aux
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+docs/draft-v2.tex
