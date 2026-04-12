@@ -138,7 +138,7 @@ BLOCKS: dict[str, dict] = {
             "val_size": 500,
             "batch_size": 16,
             "sigma": 1e-3,
-            "lr": 1e-6,
+            "lr": 1e-7,
             "prompt_style": "mezo",
             "reward": "ce",
             "no_normalize": True,

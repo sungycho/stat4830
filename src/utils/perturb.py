@@ -124,7 +124,8 @@ def es_grad_update(
         model:      model whose parameters will be updated.
         seeds:      list of perturbation seeds used in this iteration.
         rewards:    corresponding scalar rewards (one per seed).
-        lr:         effective learning rate.
+        lr:         effective learning rate (caller is responsible for any SPSA scaling,
+                    e.g. dividing by 2σ for MeZO-style raw advantages).
         top_k:      ARS-style: keep only the top-k seeds by |reward| before updating.
                     0 = disabled (use all seeds).
         normalize:  if True (default), z-score normalise rewards before update.

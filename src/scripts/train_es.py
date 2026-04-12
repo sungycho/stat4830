@@ -436,7 +436,8 @@ def main() -> None:
         f"noise={args.noise_type}  one_sided={args.one_sided}  "
         f"normalize={normalize}  top_k={args.top_k}\n"
         f"reward={args.reward}  train={len(train_data)}  val={len(val_data)}\n"
-        f"no_save={args.no_save}  prompt_style={args.prompt_style}"
+        f"no_save={args.no_save}  prompt_style={args.prompt_style}\n"
+        f"seed={args.seed}  early_stop_delta={args.early_stop_delta}  val_every={args.val_every}"
     )
 
     baseline_acc = validate(backend, val_data, task, batch_size=args.batch_size, prompt_style=args.prompt_style, reward=args.reward)
@@ -460,9 +461,14 @@ def main() -> None:
         t_iter = time.perf_counter()
 
         seeds, advantages, iter_fwd = run_es_iteration(backend.model, backend, task, train_data, args)
+        # MeZO (SPSA) requires dividing by 2σ to form an unbiased gradient estimate:
+        #   ĝ = (r⁺ − r⁻) / (2σ) · ε  (trainer.py:780 in the reference implementation)
+        # Other ES variants use z-score normalized advantages (dimensionless), so σ
+        # scaling is already absorbed and must NOT be applied a second time.
+        effective_lr = args.lr / (2 * args.sigma) if args.prompt_style == "mezo" else args.lr
         es_grad_update(
             backend.model, seeds, advantages,
-            lr=args.lr,
+            lr=effective_lr,
             top_k=args.top_k,
             normalize=normalize,
             noise_type=args.noise_type,
