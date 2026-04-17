@@ -49,6 +49,16 @@ class MnliTask(Task):
             "Answer:"
         )
 
+    def predict(self, text: str) -> str | None:
+        ent = _ENT.search(text)
+        neu = _NEU.search(text)
+        con = _CON.search(text)
+        hits = [(m.start(), lbl) for m, lbl in [(ent, "entailment"), (neu, "neutral"), (con, "contradiction")] if m]
+        return min(hits, key=lambda h: h[0])[1] if hits else None
+
+    def gold_label(self, example: dict) -> str:
+        return _LABEL_MAP[example["label"]]
+
     def label_words(self):
         return ["entailment", "neutral", "contradiction"]
 
@@ -67,7 +77,7 @@ class MnliTask(Task):
         ]
         hits = [h for h in hits if h is not None]
         if not hits:
-            return -1.0
+            return 0.0  # parse failure
         pred = min(hits, key=lambda h: h[0])[1]
         gold = _LABEL_MAP[example["label"]]
         return 1.0 if pred == gold else -1.0

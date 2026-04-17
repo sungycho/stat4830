@@ -52,6 +52,16 @@ class CopaTask(Task):
             "Answer:"
         )
 
+    def predict(self, text: str) -> str | None:
+        one = _ONE.search(text)
+        two = _TWO.search(text)
+        if one and two:
+            return "1" if one.start() < two.start() else "2"
+        return "1" if one else ("2" if two else None)
+
+    def gold_label(self, example: dict) -> str:
+        return "1" if example["label"] == 0 else "2"
+
     def score(self, text, example):
         one = _ONE.search(text)
         two = _TWO.search(text)
@@ -62,7 +72,7 @@ class CopaTask(Task):
         elif two:
             pred = 1  # choice2
         else:
-            return -1.0
+            return 0.0  # parse failure
         return 1.0 if pred == example["label"] else -1.0
 
 
@@ -77,6 +87,23 @@ class CopaTask(Task):
             f'{premise} {connector} {example["choice2"]}? '
             f'Which is more likely: 1 or 2?'
         )
+
+    def label_words_mezo(self):
+        return None  # COPA is multiple choice; no single label token for CE scoring
+
+    def score_mezo(self, text, example):
+        # Same as score() — looks for "1" or "2" in generated output
+        one = _ONE.search(text)
+        two = _TWO.search(text)
+        if one and two:
+            pred = 0 if one.start() < two.start() else 1
+        elif one:
+            pred = 0  # choice1
+        elif two:
+            pred = 1  # choice2
+        else:
+            return -1.0
+        return 1.0 if pred == example["label"] else -1.0
 
 
 def _to_list(split):

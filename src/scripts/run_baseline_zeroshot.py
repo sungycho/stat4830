@@ -99,13 +99,32 @@ def evaluate(
     prompt_style: str = "default",
 ) -> dict:
     """Run zero-shot eval and return detailed results."""
+    from collections import Counter
     correct = 0
     total = len(val_data)
     parse_failures = 0
+    gold_dist: Counter = Counter()
+    pred_dist: Counter = Counter()
 
     if prompt_style == "mezo":
         prompt_fn = task.build_prompt_mezo
         score_fn = task.score_mezo
+        raw = True
+    elif prompt_style == "base":
+        prompt_fn = task.build_prompt_base
+        score_fn = task.score
+        raw = True
+    elif prompt_style == "base_chat":
+        prompt_fn = task.build_prompt_base
+        score_fn = task.score
+        raw = False
+    elif prompt_style == "instruct":
+        prompt_fn = task.build_prompt
+        score_fn = task.score
+        raw = False
+    elif prompt_style == "instruct_raw":
+        prompt_fn = task.build_prompt
+        score_fn = task.score
         raw = True
     elif task.prefer_base_prompt:
         prompt_fn = task.build_prompt_base
@@ -124,14 +143,18 @@ def evaluate(
             score = score_fn(text, ex)
             if score > 0:
                 correct += 1
-            elif score < -0.5:
+            elif score == 0.0:
                 parse_failures += 1
+            gold_dist[task.gold_label(ex)] += 1
+            pred_dist[task.predict(text) or "parse_fail"] += 1
 
     return {
         "accuracy": correct / total if total > 0 else 0.0,
         "correct": correct,
         "total": total,
         "parse_failures": parse_failures,
+        "gold_dist": dict(gold_dist),
+        "pred_dist": dict(pred_dist),
     }
 
 
@@ -186,9 +209,11 @@ def parse_args():
     )
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--prompt-style", default="default", choices=["default", "mezo"],
-                   help="Prompt template style. 'mezo' uses exact templates from the MeZO paper "
-                        "(2305.17333, Appendix Table 14).")
+    p.add_argument("--prompt-style", default="default", choices=["default", "mezo", "base", "base_chat", "instruct", "instruct_raw"],
+                   help="Prompt template style. 'mezo' uses MeZO paper templates (2305.17333 Table 14). "
+                        "'base' forces few-shot completion prompts regardless of model type. "
+                        "'instruct' forces chat-template prompts regardless of model type. "
+                        "'default' auto-detects from model chat template.")
     p.add_argument(
         "--out-dir", default=None,
         help="Output dir (default: results/baseline_zeroshot_<ts>)",
@@ -382,20 +407,30 @@ def main() -> None:
                 c = eval_result["correct"]
                 tot = eval_result["total"]
                 pf = eval_result["parse_failures"]
+                gold_dist = eval_result["gold_dist"]
+                pred_dist = eval_result["pred_dist"]
                 print(
                     f"  Accuracy: {acc:.4f} ({c}/{tot})"
                     f" | parse_failures: {pf}"
                     f" | time: {eval_time:.1f}s"
                 )
+                if gold_dist:
+                    gold_str = "  ".join(f"{k}: {v/tot:.1%}" for k, v in sorted(gold_dist.items()))
+                    pred_str = "  ".join(f"{k}: {v/tot:.1%}" for k, v in sorted(pred_dist.items()))
+                    print(f"  Gold dist:  {gold_str}")
+                    print(f"  Pred dist:  {pred_str}")
 
                 all_results.append({
                     "model_alias": model_alias,
                     "model_hf_id": hf_id,
                     "task": task_name,
+                    "prompt_style": args.prompt_style,
                     "accuracy": acc,
                     "correct": c,
                     "total": tot,
                     "parse_failures": pf,
+                    "gold_dist": gold_dist,
+                    "pred_dist": pred_dist,
                     "eval_time_s": round(eval_time, 2),
                     "val_size": args.val_size,
                     "seed": args.seed,

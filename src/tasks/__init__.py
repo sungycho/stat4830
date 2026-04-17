@@ -50,6 +50,18 @@ class Task(ABC):
         """
         return False
 
+    def predict(self, text: str) -> str | None:
+        """Extract the predicted label string from model output. None = parse failure.
+
+        Used for prediction distribution analysis (not scoring/training).
+        Override in each task alongside score().
+        """
+        return None
+
+    def gold_label(self, example: dict) -> str:
+        """Return the gold label string for an example. Used for distribution analysis."""
+        return str(example.get("label", "?"))
+
     def reward(self, text: str, example: dict) -> float:
         """Training reward signal. Defaults to remapping score() {-1,+1} → {0,1}.
 

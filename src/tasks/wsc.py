@@ -43,6 +43,16 @@ class WscTask(Task):
             "Answer:"
         )
 
+    def predict(self, text: str) -> str | None:
+        yes = _YES.search(text)
+        no = _NO.search(text)
+        if yes and no:
+            return "yes" if yes.start() < no.start() else "no"
+        return "yes" if yes else ("no" if no else None)
+
+    def gold_label(self, example: dict) -> str:
+        return "yes" if example["label"] == 1 else "no"
+
     def label_words(self):
         return ["yes", "no"]
 
@@ -61,7 +71,7 @@ class WscTask(Task):
         elif no:
             pred = 0
         else:
-            return -1.0
+            return 0.0  # parse failure
         return 1.0 if pred == example["label"] else -1.0
 
 
@@ -72,6 +82,26 @@ class WscTask(Task):
             f'In the previous sentence, does the pronoun "{example["span2_text"]}" '
             f'refer to {example["span1_text"]}? Yes or No?'
         )
+
+    def label_words_mezo(self):
+        return ["Yes", "No"]
+
+    def score_mezo(self, text, example):
+        yes = _YES.search(text)
+        no = _NO.search(text)
+        if yes and no:
+            pred = 1 if yes.start() < no.start() else 0
+        elif yes:
+            pred = 1  # coreference
+        elif no:
+            pred = 0  # no coreference
+        else:
+            return -1.0
+        return 1.0 if pred == example["label"] else -1.0
+
+    def score_ce_mezo(self, log_probs, example):
+        correct = "Yes" if example["label"] == 1 else "No"
+        return log_probs[correct]
 
 
 def _to_list(split):

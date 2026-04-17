@@ -65,7 +65,7 @@ def decomp_eval(backend, val_data: list[dict], task, batch_size: int,
                      indexed identically to val_data. If None, skips decomposition counts.
     """
     prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style == "mezo"
+    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
     categories = []
     predictions = []  # "yes", "no", "format_error"
     for i in range(0, len(val_data), batch_size):
@@ -180,7 +180,7 @@ def parse_args():
     p.add_argument("--top-k",            type=int,   default=0,
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
     # prompt style
-    p.add_argument("--prompt-style", default="default", choices=["default", "mezo"],
+    p.add_argument("--prompt-style", default="default", choices=["default", "mezo", "base"],
                    help="Prompt template style. 'mezo' uses exact templates from the MeZO paper "
                         "(2305.17333, Appendix Table 14). Note: SST-2 and CB use different label "
                         "words under 'mezo' (great/terrible and Yes/No/Maybe respectively).")
@@ -237,6 +237,8 @@ def _prompt_fn(task, backend, prompt_style: str = "default"):
     """Select prompt builder based on prompt_style and backend capabilities."""
     if prompt_style == "mezo":
         return task.build_prompt_mezo
+    if prompt_style == "base":
+        return task.build_prompt_base
     if task.prefer_base_prompt:
         return task.build_prompt_base
     return task.build_prompt if backend.is_instruct else task.build_prompt_base
@@ -261,7 +263,7 @@ def eval_batch(backend, examples: list[dict], task, prompt_style: str = "default
     score_mezo is always ±1 (no composite extension defined for MeZO).
     """
     prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style == "mezo"
+    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
     prompts = [prompt_fn(ex) for ex in examples]
     outputs = backend.generate_batch(prompts, raw=raw)
     if prompt_style == "mezo":
@@ -285,7 +287,7 @@ def eval_batch_ce(backend, examples: list[dict], task, prompt_style: str = "defa
     Range: (-inf, 0], where 0 means the model is certain about every correct label.
     """
     prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style == "mezo"
+    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
     prompts = [prompt_fn(ex) for ex in examples]
     lw = _label_words(task, prompt_style)
     log_probs_list = backend.score_logprobs_batch(prompts, lw, raw=raw)
@@ -303,7 +305,7 @@ def validate(backend, val_data: list[dict], task, batch_size: int = 16,
     Otherwise falls back to generation + regex scoring.
     """
     prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style == "mezo"
+    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
     lw = _label_words(task, prompt_style)
     use_ce_eval = reward == "ce" and lw is not None
 
@@ -321,7 +323,10 @@ def validate(backend, val_data: list[dict], task, batch_size: int = 16,
         else:
             score_fn = _score_fn(task, prompt_style)
             outputs = backend.generate_batch(prompts, raw=raw)
-            correct += sum(score_fn(text, ex) > 0 for text, ex in zip(outputs, chunk))
+            for text, ex in zip(outputs, chunk):
+                s = score_fn(text, ex)
+                if s > 0:
+                    correct += 1
     return correct / len(val_data)
 
 
