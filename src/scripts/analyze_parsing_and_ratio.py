@@ -102,6 +102,9 @@ def _compute_raw(force_raw: bool, chat_template_override, backend) -> bool:
     return not bool(getattr(backend.tokenizer, "chat_template", None))
 
 
+_MAX_FAILURE_SAMPLES = 50
+
+
 def evaluate(
     backend, val_data: list[dict], task, batch_size: int,
     prompt_style: str = "simple", chat_template=None,
@@ -113,6 +116,7 @@ def evaluate(
     parse_failures = 0
     gold_dist: Counter = Counter()
     pred_by_gold: dict = {}
+    failure_samples: list[dict] = []
 
     prompt_cfg = resolve_prompt_config(task, prompt_style)
     raw = _compute_raw(prompt_cfg.force_raw or task.prefer_base_prompt, chat_template, backend)
@@ -125,11 +129,17 @@ def evaluate(
             print(f"\n--- Example prompt ({prompt_style}) ---\n{prompts[0]}\n---")
             first = False
         outputs = backend.generate_batch(prompts, raw=raw)
-        for text, ex in zip(outputs, chunk):
+        for text, ex, prompt in zip(outputs, chunk, prompts):
             gold = task.gold_label(ex)
             pred = task.predict(text)
             if pred is None:
                 parse_failures += 1
+                if len(failure_samples) < _MAX_FAILURE_SAMPLES:
+                    failure_samples.append({
+                        "gold": gold,
+                        "generated": repr(text),
+                        "prompt_tail": prompt[-120:],
+                    })
             elif pred == gold:
                 correct += 1
             gold_dist[gold] += 1
@@ -145,6 +155,7 @@ def evaluate(
         "gold_dist": dict(gold_dist),
         "pred_by_gold": {g: dict(c) for g, c in pred_by_gold.items()},
         "raw": raw,
+        "parse_failure_samples": failure_samples,
     }
 
 
@@ -450,6 +461,7 @@ def main() -> None:
                     "parse_failures": pf,
                     "gold_dist": gold_dist,
                     "pred_by_gold": pred_by_gold,
+                    "parse_failure_samples": eval_result["parse_failure_samples"],
                     "eval_time_s": round(eval_time, 2),
                     "val_size": args.val_size,
                     "seed": args.seed,
