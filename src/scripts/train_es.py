@@ -155,7 +155,7 @@ def parse_args():
                         "All constants (2σ, population size, etc.) are absorbed here.")
     p.add_argument("--train-size",       type=int,   default=64)
     p.add_argument("--val-size",         type=int,   default=200)
-    p.add_argument("--early-stop-delta", type=float, default=0.1,
+    p.add_argument("--early-stop-delta", type=float, default=0.0,
                    help="Stop if val_acc drops more than this below best (0 = disabled)")
     p.add_argument("--seed",             type=int,   default=42)
     p.add_argument("--out-dir",          type=str,   default=None,
