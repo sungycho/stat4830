@@ -150,7 +150,9 @@ def parse_args():
     p.add_argument("--batch-size",       type=int,   default=16)
     p.add_argument("--val-every",        type=int,   default=2)
     p.add_argument("--sigma",            type=float, default=1e-3)
-    p.add_argument("--lr",               type=float, default=1e-4)
+    p.add_argument("--lr",               type=float, default=1e-4,
+                   help="Learning rate passed directly to es_grad_update. "
+                        "All constants (2σ, population size, etc.) are absorbed here.")
     p.add_argument("--train-size",       type=int,   default=64)
     p.add_argument("--val-size",         type=int,   default=200)
     p.add_argument("--early-stop-delta", type=float, default=0.1,
@@ -461,14 +463,9 @@ def main() -> None:
         t_iter = time.perf_counter()
 
         seeds, advantages, iter_fwd = run_es_iteration(backend.model, backend, task, train_data, args)
-        # MeZO (SPSA) requires dividing by 2σ to form an unbiased gradient estimate:
-        #   ĝ = (r⁺ − r⁻) / (2σ) · ε  (trainer.py:780 in the reference implementation)
-        # Other ES variants use z-score normalized advantages (dimensionless), so σ
-        # scaling is already absorbed and must NOT be applied a second time.
-        effective_lr = args.lr / (2 * args.sigma) if args.prompt_style == "mezo" else args.lr
         es_grad_update(
             backend.model, seeds, advantages,
-            lr=effective_lr,
+            lr=args.lr,
             top_k=args.top_k,
             normalize=normalize,
             noise_type=args.noise_type,

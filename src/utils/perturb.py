@@ -141,12 +141,7 @@ def es_grad_update(
         r = r[indices]
         N = len(seeds)
 
-    if normalize:
-        if N < 2:
-            raise ValueError(
-                "es_grad_update with normalize=True requires at least 2 seeds; "
-                "z-score is undefined for N=1."
-            )
+    if normalize and N >= 2:
         std = r.std()  # Bessel-corrected, defined for N≥2
         r_norm = (r - r.mean()) / (std + 1e-8)
     else:
