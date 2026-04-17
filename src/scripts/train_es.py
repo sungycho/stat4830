@@ -438,7 +438,7 @@ def main() -> None:
     # total_fwd: train_fwd + validation passes (informational; not used as x-axis).
     cumulative_train_fwd = run_state.get("cumulative_train_fwd", 0)
     cumulative_total_fwd = run_state.get("cumulative_total_fwd", 0)
-    if not args.no_save:
+    if not args.no_save and not run_state:
         save_checkpoint(backend.model, run_dir / "best.pt", {
             "iteration": start_iter, "best_val_acc": best_val_acc,
             "cumulative_train_fwd": cumulative_train_fwd,
