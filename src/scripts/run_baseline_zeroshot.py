@@ -104,7 +104,7 @@ def evaluate(
     total = len(val_data)
     parse_failures = 0
     gold_dist: Counter = Counter()
-    pred_dist: Counter = Counter()
+    pred_by_gold: dict = {}
 
     if prompt_style == "mezo":
         prompt_fn = task.build_prompt_mezo
@@ -140,13 +140,16 @@ def evaluate(
         prompts = [prompt_fn(ex) for ex in chunk]
         outputs = backend.generate_batch(prompts, raw=raw)
         for text, ex in zip(outputs, chunk):
-            score = score_fn(text, ex)
-            if score > 0:
-                correct += 1
-            elif score == 0.0:
+            gold = task.gold_label(ex)
+            pred = task.predict(text)
+            if pred is None:
                 parse_failures += 1
-            gold_dist[task.gold_label(ex)] += 1
-            pred_dist[task.predict(text) or "parse_fail"] += 1
+            elif pred == gold:
+                correct += 1
+            gold_dist[gold] += 1
+            if gold not in pred_by_gold:
+                pred_by_gold[gold] = Counter()
+            pred_by_gold[gold][pred or "parse_fail"] += 1
 
     return {
         "accuracy": correct / total if total > 0 else 0.0,
@@ -154,7 +157,7 @@ def evaluate(
         "total": total,
         "parse_failures": parse_failures,
         "gold_dist": dict(gold_dist),
-        "pred_dist": dict(pred_dist),
+        "pred_by_gold": {g: dict(c) for g, c in pred_by_gold.items()},
     }
 
 
@@ -408,7 +411,7 @@ def main() -> None:
                 tot = eval_result["total"]
                 pf = eval_result["parse_failures"]
                 gold_dist = eval_result["gold_dist"]
-                pred_dist = eval_result["pred_dist"]
+                pred_by_gold = eval_result["pred_by_gold"]
                 print(
                     f"  Accuracy: {acc:.4f} ({c}/{tot})"
                     f" | parse_failures: {pf}"
@@ -416,9 +419,11 @@ def main() -> None:
                 )
                 if gold_dist:
                     gold_str = "  ".join(f"{k}: {v/tot:.1%}" for k, v in sorted(gold_dist.items()))
-                    pred_str = "  ".join(f"{k}: {v/tot:.1%}" for k, v in sorted(pred_dist.items()))
                     print(f"  Gold dist:  {gold_str}")
-                    print(f"  Pred dist:  {pred_str}")
+                    for gold_lbl, preds in sorted(pred_by_gold.items()):
+                        n_gold = gold_dist[gold_lbl]
+                        pred_str = "  ".join(f"{k}: {v/n_gold:.1%}" for k, v in sorted(preds.items()))
+                        print(f"  [{gold_lbl}] → {pred_str}")
 
                 all_results.append({
                     "model_alias": model_alias,
@@ -430,7 +435,7 @@ def main() -> None:
                     "total": tot,
                     "parse_failures": pf,
                     "gold_dist": gold_dist,
-                    "pred_dist": pred_dist,
+                    "pred_by_gold": pred_by_gold,
                     "eval_time_s": round(eval_time, 2),
                     "val_size": args.val_size,
                     "seed": args.seed,
