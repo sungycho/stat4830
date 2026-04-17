@@ -46,6 +46,10 @@ class BoolqTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        passage = example["passage"][:_PASSAGE_MAX_CHARS]
+        return f'{passage}\n{example["question"]}?'
+
     def predict(self, text: str) -> str | None:
         yes = _YES.search(text)
         no = _NO.search(text)

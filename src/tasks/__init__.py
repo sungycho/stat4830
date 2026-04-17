@@ -8,8 +8,39 @@ To add a new task:
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 _REGISTRY: dict[str, type["Task"]] = {}
+
+PROMPT_STYLES: list[str] = ["mezo", "simple", "complex", "free"]
+
+
+class PromptConfig(NamedTuple):
+    prompt_fn: object
+    score_fn: object
+    label_words: list | None
+    score_ce_fn: object
+    force_raw: bool
+
+
+def resolve_prompt_config(task: "Task", prompt_style: str) -> PromptConfig:
+    """Return the prompt/score callables and raw flag for a given prompt style."""
+    if prompt_style == "mezo":
+        return PromptConfig(
+            prompt_fn=task.build_prompt_mezo,
+            score_fn=task.score_mezo,
+            label_words=task.label_words_mezo(),
+            score_ce_fn=task.score_ce_mezo,
+            force_raw=True,
+        )
+    elif prompt_style == "simple":
+        return PromptConfig(task.build_prompt, task.score, task.label_words(), task.score_ce, False)
+    elif prompt_style == "complex":
+        return PromptConfig(task.build_prompt_base, task.score, task.label_words(), task.score_ce, False)
+    elif prompt_style == "free":
+        return PromptConfig(task.build_prompt_free, task.score, task.label_words(), task.score_ce, False)
+    else:
+        raise ValueError(f"Unknown prompt_style {prompt_style!r}. Choose from {PROMPT_STYLES}.")
 
 
 class Task(ABC):
@@ -26,6 +57,14 @@ class Task(ABC):
     def build_prompt(self, example: dict) -> str:
         """Build the prompt string for a single example."""
         ...
+
+    def build_prompt_free(self, example: dict) -> str:
+        """Bare input with no few-shot examples and no task instructions.
+
+        Override per task to return the raw input text only.
+        Defaults to build_prompt as a safe fallback.
+        """
+        return self.build_prompt(example)
 
     def build_prompt_base(self, example: dict) -> str:
         """Few-shot completion-style prompt for base models (no chat template).

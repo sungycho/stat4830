@@ -39,6 +39,19 @@ class Sst2Task(Task):
             "Sentiment:"
         )
 
+    def build_prompt_free(self, example):
+        return f'"{example["sentence"]}"'
+
+    def predict(self, text: str) -> str | None:
+        pos = _POS.search(text)
+        neg = _NEG.search(text)
+        if pos and neg:
+            return "positive" if pos.start() < neg.start() else "negative"
+        return "positive" if pos else ("negative" if neg else None)
+
+    def gold_label(self, example: dict) -> str:
+        return _LABEL_MAP[example["label"]]
+
     def label_words(self):
         return ["positive", "negative"]
 

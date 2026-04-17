@@ -52,6 +52,9 @@ class CopaTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        return f'{example["premise"]} {example["choice1"]} / {example["choice2"]}'
+
     def predict(self, text: str) -> str | None:
         one = _ONE.search(text)
         two = _TWO.search(text)

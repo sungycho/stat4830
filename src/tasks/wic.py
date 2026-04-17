@@ -47,6 +47,9 @@ class WicTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        return f'{example["sentence1"]}\n{example["sentence2"]}'
+
     def predict(self, text: str) -> str | None:
         yes = _YES.search(text)
         no = _NO.search(text)

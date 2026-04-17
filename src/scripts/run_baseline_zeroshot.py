@@ -34,7 +34,7 @@ from pathlib import Path
 import torch
 
 from src.backends.factory import create_backend
-from src.tasks import get_task, available_tasks
+from src.tasks import get_task, available_tasks, PROMPT_STYLES, resolve_prompt_config
 
 
 # ------------------------------------------------------------------
@@ -94,9 +94,17 @@ _DEFAULT_MAX_TOKENS = 8
 # ------------------------------------------------------------------
 # Evaluation
 # ------------------------------------------------------------------
+def _compute_raw(force_raw: bool, chat_template_override, backend) -> bool:
+    if force_raw:
+        return True
+    if chat_template_override is not None:
+        return not chat_template_override
+    return not bool(getattr(backend.tokenizer, "chat_template", None))
+
+
 def evaluate(
     backend, val_data: list[dict], task, batch_size: int,
-    prompt_style: str = "default",
+    prompt_style: str = "simple", chat_template=None,
 ) -> dict:
     """Run zero-shot eval and return detailed results."""
     from collections import Counter
@@ -106,38 +114,12 @@ def evaluate(
     gold_dist: Counter = Counter()
     pred_by_gold: dict = {}
 
-    if prompt_style == "mezo":
-        prompt_fn = task.build_prompt_mezo
-        score_fn = task.score_mezo
-        raw = True
-    elif prompt_style == "base":
-        prompt_fn = task.build_prompt_base
-        score_fn = task.score
-        raw = True
-    elif prompt_style == "base_chat":
-        prompt_fn = task.build_prompt_base
-        score_fn = task.score
-        raw = False
-    elif prompt_style == "instruct":
-        prompt_fn = task.build_prompt
-        score_fn = task.score
-        raw = False
-    elif prompt_style == "instruct_raw":
-        prompt_fn = task.build_prompt
-        score_fn = task.score
-        raw = True
-    elif task.prefer_base_prompt:
-        prompt_fn = task.build_prompt_base
-        score_fn = task.score
-        raw = True
-    else:
-        prompt_fn = task.build_prompt if backend.is_instruct else task.build_prompt_base
-        score_fn = task.score
-        raw = False
+    prompt_cfg = resolve_prompt_config(task, prompt_style)
+    raw = _compute_raw(prompt_cfg.force_raw or task.prefer_base_prompt, chat_template, backend)
 
     for i in range(0, total, batch_size):
         chunk = val_data[i:i + batch_size]
-        prompts = [prompt_fn(ex) for ex in chunk]
+        prompts = [prompt_cfg.prompt_fn(ex) for ex in chunk]
         outputs = backend.generate_batch(prompts, raw=raw)
         for text, ex in zip(outputs, chunk):
             gold = task.gold_label(ex)
@@ -158,6 +140,7 @@ def evaluate(
         "parse_failures": parse_failures,
         "gold_dist": dict(gold_dist),
         "pred_by_gold": {g: dict(c) for g, c in pred_by_gold.items()},
+        "raw": raw,
     }
 
 
@@ -212,11 +195,15 @@ def parse_args():
     )
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--prompt-style", default="default", choices=["default", "mezo", "base", "base_chat", "instruct", "instruct_raw"],
-                   help="Prompt template style. 'mezo' uses MeZO paper templates (2305.17333 Table 14). "
-                        "'base' forces few-shot completion prompts regardless of model type. "
-                        "'instruct' forces chat-template prompts regardless of model type. "
-                        "'default' auto-detects from model chat template.")
+    p.add_argument("--prompt-style", default="simple", choices=PROMPT_STYLES,
+                   help="Prompt template style. 'simple': few-shot completion. "
+                        "'complex': instruction format. 'mezo': MeZO paper templates (always raw). "
+                        "'free': bare input, no examples or instructions.")
+    p.add_argument("--chat-template", dest="chat_template", action="store_true", default=None,
+                   help="Force apply the model's chat template.")
+    p.add_argument("--no-chat-template", dest="chat_template", action="store_false",
+                   help="Force skip the chat template regardless of model type.")
+    p.set_defaults(chat_template=None)
     p.add_argument(
         "--out-dir", default=None,
         help="Output dir (default: results/baseline_zeroshot_<ts>)",
@@ -342,6 +329,7 @@ def main() -> None:
     print(f"Tasks  ({len(task_names)}): {task_names}")
     print(f"Device: {args.device}  |  Dtype: {dtype}")
     print(f"Val size: {args.val_size}  |  Evals: {n_evals}")
+    print(f"Prompt style: {args.prompt_style}")
 
     all_results: list[dict] = []
 
@@ -379,6 +367,10 @@ def main() -> None:
 
         load_time = time.perf_counter() - t_load
         print(f"  Model loaded in {load_time:.1f}s")
+        has_tmpl = bool(getattr(backend.tokenizer, "chat_template", None))
+        resolved_ct = args.chat_template if args.chat_template is not None else has_tmpl
+        ct_src = "forced" if args.chat_template is not None else "auto"
+        print(f"  Chat template: {'active' if resolved_ct else 'inactive'}  [{ct_src}]")
 
         for task_name in task_names:
             print(f"\n  --- Task: {task_name} ---")
@@ -403,6 +395,7 @@ def main() -> None:
                 eval_result = evaluate(
                     backend, val_data, task, args.batch_size,
                     prompt_style=args.prompt_style,
+                    chat_template=args.chat_template,
                 )
                 eval_time = time.perf_counter() - t_eval
 
@@ -412,6 +405,8 @@ def main() -> None:
                 pf = eval_result["parse_failures"]
                 gold_dist = eval_result["gold_dist"]
                 pred_by_gold = eval_result["pred_by_gold"]
+                raw = eval_result["raw"]
+                chat_template_active = not raw
                 print(
                     f"  Accuracy: {acc:.4f} ({c}/{tot})"
                     f" | parse_failures: {pf}"
@@ -430,6 +425,8 @@ def main() -> None:
                     "model_hf_id": hf_id,
                     "task": task_name,
                     "prompt_style": args.prompt_style,
+                    "chat_template_arg": args.chat_template,
+                    "chat_template_active": chat_template_active,
                     "accuracy": acc,
                     "correct": c,
                     "total": tot,

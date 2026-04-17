@@ -32,7 +32,7 @@ import torch
 
 import src.utils.perturb as perturb_module
 from src.backends.factory import create_backend
-from src.tasks import get_task, available_tasks
+from src.tasks import get_task, available_tasks, PROMPT_STYLES, resolve_prompt_config, PromptConfig
 from src.utils.seeds import set_seeds
 from src.utils.perturb import perturb_inplace, restore_inplace, es_grad_update
 
@@ -57,15 +57,13 @@ def _classify_output(text: str, example: dict) -> str:
 
 def decomp_eval(backend, val_data: list[dict], task, batch_size: int,
                 base_categories: list[str] | None,
-                prompt_style: str = "default") -> dict:
+                prompt_fn, raw: bool) -> dict:
     """Run full per-example decomposition eval over val_data.
 
     Returns aggregate counts and per-example categories.
     base_categories: list of 'correct'/'wrong_answer'/'format_error' from base model run,
                      indexed identically to val_data. If None, skips decomposition counts.
     """
-    prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
     categories = []
     predictions = []  # "yes", "no", "format_error"
     for i in range(0, len(val_data), batch_size):
@@ -180,10 +178,16 @@ def parse_args():
     p.add_argument("--top-k",            type=int,   default=0,
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
     # prompt style
-    p.add_argument("--prompt-style", default="default", choices=["default", "mezo", "base"],
-                   help="Prompt template style. 'mezo' uses exact templates from the MeZO paper "
-                        "(2305.17333, Appendix Table 14). Note: SST-2 and CB use different label "
-                        "words under 'mezo' (great/terrible and Yes/No/Maybe respectively).")
+    p.add_argument("--prompt-style", default="simple", choices=PROMPT_STYLES,
+                   help="Prompt template style. 'simple': few-shot completion (build_prompt_base). "
+                        "'complex': instruction format (build_prompt). "
+                        "'mezo': MeZO paper templates (2305.17333, Table 14), always raw. "
+                        "'free': bare input, no examples or instructions.")
+    p.add_argument("--chat-template", dest="chat_template", action="store_true", default=None,
+                   help="Force apply the model's chat template (overrides auto-detect).")
+    p.add_argument("--no-chat-template", dest="chat_template", action="store_false",
+                   help="Force skip the chat template regardless of model type.")
+    p.set_defaults(chat_template=None)
     # reward model
     p.add_argument("--reward", default="accuracy", choices=["accuracy", "ce"],
                    help="Training reward signal. 'accuracy': binary +1/-1 (default). "
@@ -233,105 +237,79 @@ def load_run_state(checkpoint_path: str) -> dict:
     return {}
 
 
-def _prompt_fn(task, backend, prompt_style: str = "default"):
-    """Select prompt builder based on prompt_style and backend capabilities."""
-    if prompt_style == "mezo":
-        return task.build_prompt_mezo
-    if prompt_style == "base":
-        return task.build_prompt_base
-    if task.prefer_base_prompt:
-        return task.build_prompt_base
-    return task.build_prompt if backend.is_instruct else task.build_prompt_base
+def _compute_raw(force_raw: bool, chat_template_override, backend) -> bool:
+    """Determine whether to skip the chat template when calling the backend.
+
+    force_raw=True (mezo) always bypasses the template.
+    chat_template_override=True/False lets the user force a specific behaviour.
+    None auto-detects: skip template if the tokenizer has none.
+    """
+    if force_raw:
+        return True
+    if chat_template_override is not None:
+        return not chat_template_override
+    return not bool(getattr(backend.tokenizer, "chat_template", None))
 
 
-def _score_fn(task, prompt_style: str):
-    """Select the score function matching the active prompt style."""
-    return task.score_mezo if prompt_style == "mezo" else task.score
-
-
-def _label_words(task, prompt_style: str):
-    """Select label words matching the active prompt style."""
-    return task.label_words_mezo() if prompt_style == "mezo" else task.label_words()
-
-
-def eval_batch(backend, examples: list[dict], task, prompt_style: str = "default") -> float:
+def eval_batch(backend, examples: list[dict], task, prompt_cfg: PromptConfig, raw: bool) -> float:
     """Evaluate a mini-batch using task.reward() as the training signal.
 
-    For the default prompt style, delegates to task.reward() so tasks with
-    custom composite rewards (e.g. countdown's format+answer signal) are
-    preserved. For MeZO style, maps score_mezo > 0 to binary {0, 1} because
-    score_mezo is always ±1 (no composite extension defined for MeZO).
+    For mezo (force_raw=True), maps score_mezo > 0 to binary {0, 1}.
+    For other styles, delegates to task.reward() so tasks with custom composite
+    rewards (e.g. countdown's format+answer signal) are preserved.
     """
-    prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
-    prompts = [prompt_fn(ex) for ex in examples]
+    prompts = [prompt_cfg.prompt_fn(ex) for ex in examples]
     outputs = backend.generate_batch(prompts, raw=raw)
-    if prompt_style == "mezo":
-        score_fn = task.score_mezo
-        rewards = [1.0 if score_fn(text, ex) > 0 else 0.0 for text, ex in zip(outputs, examples)]
+    if prompt_cfg.force_raw:
+        rewards = [1.0 if prompt_cfg.score_fn(text, ex) > 0 else 0.0 for text, ex in zip(outputs, examples)]
     else:
         rewards = [task.reward(text, ex) for text, ex in zip(outputs, examples)]
     return sum(rewards) / len(rewards)
 
 
-def _score_ce_fn(task, prompt_style: str):
-    """Select the CE score function matching the active prompt style."""
-    return task.score_ce_mezo if prompt_style == "mezo" else task.score_ce
-
-
-def eval_batch_ce(backend, examples: list[dict], task, prompt_style: str = "default") -> float:
+def eval_batch_ce(backend, examples: list[dict], task, prompt_cfg: PromptConfig, raw: bool) -> float:
     """Evaluate a mini-batch using CE reward (restricted log-softmax over label words).
 
     Single forward pass only — no generation needed. Returns mean log P(correct | prompt)
     over the batch, where the log-prob is restricted/normalized over label_words().
     Range: (-inf, 0], where 0 means the model is certain about every correct label.
     """
-    prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
-    prompts = [prompt_fn(ex) for ex in examples]
-    lw = _label_words(task, prompt_style)
-    log_probs_list = backend.score_logprobs_batch(prompts, lw, raw=raw)
-    score_ce_fn = _score_ce_fn(task, prompt_style)
-    rewards = [score_ce_fn(lp, ex) for lp, ex in zip(log_probs_list, examples)]
+    prompts = [prompt_cfg.prompt_fn(ex) for ex in examples]
+    log_probs_list = backend.score_logprobs_batch(prompts, prompt_cfg.label_words, raw=raw)
+    rewards = [prompt_cfg.score_ce_fn(lp, ex) for lp, ex in zip(log_probs_list, examples)]
     return sum(rewards) / len(rewards)
 
 
-def validate(backend, val_data: list[dict], task, batch_size: int = 16,
-             prompt_style: str = "default", reward: str = "accuracy") -> float:
+def validate(backend, val_data: list[dict], task, batch_size: int,
+             prompt_cfg: PromptConfig, raw: bool, reward: str = "accuracy") -> float:
     """Validate over the full val set, chunked into batched forward passes.
 
     When reward='ce' and the task has label words, uses log-likelihood argmax for
     accuracy (matching the paper's evaluation strategy for classification tasks).
     Otherwise falls back to generation + regex scoring.
     """
-    prompt_fn = _prompt_fn(task, backend, prompt_style)
-    raw = task.prefer_base_prompt or prompt_style in ("mezo", "base")
-    lw = _label_words(task, prompt_style)
-    use_ce_eval = reward == "ce" and lw is not None
+    use_ce_eval = reward == "ce" and prompt_cfg.label_words is not None
 
     correct = 0
     for i in range(0, len(val_data), batch_size):
         chunk = val_data[i:i + batch_size]
-        prompts = [prompt_fn(ex) for ex in chunk]
+        prompts = [prompt_cfg.prompt_fn(ex) for ex in chunk]
         if use_ce_eval:
-            log_probs_list = backend.score_logprobs_batch(prompts, lw, raw=raw)
-            score_ce_fn = _score_ce_fn(task, prompt_style)
+            log_probs_list = backend.score_logprobs_batch(prompts, prompt_cfg.label_words, raw=raw)
             for lp, ex in zip(log_probs_list, chunk):
-                correct_lp = score_ce_fn(lp, ex)
+                correct_lp = prompt_cfg.score_ce_fn(lp, ex)
                 if correct_lp >= max(lp.values()) - 1e-9:
                     correct += 1
         else:
-            score_fn = _score_fn(task, prompt_style)
             outputs = backend.generate_batch(prompts, raw=raw)
             for text, ex in zip(outputs, chunk):
-                s = score_fn(text, ex)
-                if s > 0:
+                if prompt_cfg.score_fn(text, ex) > 0:
                     correct += 1
     return correct / len(val_data)
 
 
 def run_es_iteration(
-    model, backend, task, train_data, args
+    model, backend, task, train_data, args, prompt_cfg: PromptConfig, raw: bool
 ) -> tuple[list[int], list[float], int]:
     """Run one ES iteration. Returns (seeds, advantages, fwd_passes_used)."""
     effective_batch = min(args.batch_size, len(train_data))
@@ -341,9 +319,8 @@ def run_es_iteration(
     seeds, advantages = [], []
     fwd_passes = 0
 
-    ps = args.prompt_style
-    _eval = (lambda b, ex, t: eval_batch_ce(b, ex, t, ps)) if args.reward == "ce" \
-            else (lambda b, ex, t: eval_batch(b, ex, t, ps))
+    _eval = (lambda b, ex, t: eval_batch_ce(b, ex, t, prompt_cfg, raw)) if args.reward == "ce" \
+            else (lambda b, ex, t: eval_batch(b, ex, t, prompt_cfg, raw))
     nt = args.noise_type
     for _ in range(args.population_size):
         seed = random.randint(0, 2**31)
@@ -425,6 +402,9 @@ def main() -> None:
         train_size=args.train_size, val_size=args.val_size, seed=args.seed
     )
 
+    prompt_cfg = resolve_prompt_config(task, args.prompt_style)
+    raw = _compute_raw(prompt_cfg.force_raw or task.prefer_base_prompt, args.chat_template, backend)
+
     run_state = {}
     if args.resume_from:
         ckpt = torch.load(args.resume_from, map_location=args.device, weights_only=True)
@@ -443,11 +423,12 @@ def main() -> None:
         f"noise={args.noise_type}  one_sided={args.one_sided}  "
         f"normalize={normalize}  top_k={args.top_k}\n"
         f"reward={args.reward}  train={len(train_data)}  val={len(val_data)}\n"
-        f"no_save={args.no_save}  prompt_style={args.prompt_style}\n"
+        f"no_save={args.no_save}  prompt_style={args.prompt_style}  "
+        f"chat_template={'auto-detect' if args.chat_template is None else args.chat_template} → active={not raw}\n"
         f"seed={args.seed}  early_stop_delta={args.early_stop_delta}  val_every={args.val_every}"
     )
 
-    baseline_acc = validate(backend, val_data, task, batch_size=args.batch_size, prompt_style=args.prompt_style, reward=args.reward)
+    baseline_acc = validate(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
     print(f"Baseline val_acc: {baseline_acc:.3f} ({int(baseline_acc * len(val_data))}/{len(val_data)})")
     log_entry(log_path, {"event": "baseline", "val_acc": baseline_acc})
 
@@ -467,7 +448,7 @@ def main() -> None:
     for iteration in range(args.num_iters):
         t_iter = time.perf_counter()
 
-        seeds, advantages, iter_fwd = run_es_iteration(backend.model, backend, task, train_data, args)
+        seeds, advantages, iter_fwd = run_es_iteration(backend.model, backend, task, train_data, args, prompt_cfg, raw)
         es_grad_update(
             backend.model, seeds, advantages,
             lr=args.lr,
@@ -509,7 +490,7 @@ def main() -> None:
 
         if (iteration + 1) % args.val_every == 0:
             if args.track_decomposition:
-                decomp = decomp_eval(backend, val_data, task, args.batch_size, base_categories, prompt_style=args.prompt_style)
+                decomp = decomp_eval(backend, val_data, task, args.batch_size, base_categories, prompt_cfg.prompt_fn, raw)
                 val_acc = decomp["val_acc"]
                 cumulative_total_fwd += len(val_data)
                 decomp_entry = {
@@ -526,7 +507,7 @@ def main() -> None:
                 )
                 print(f"  [decomp] {decomp_summary}")
             else:
-                val_acc = validate(backend, val_data, task, batch_size=args.batch_size, prompt_style=args.prompt_style, reward=args.reward)
+                val_acc = validate(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
                 cumulative_total_fwd += len(val_data)
 
             entry["val_acc"] = val_acc

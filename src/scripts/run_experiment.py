@@ -359,6 +359,14 @@ def parse_args():
 def main() -> None:
     args = parse_args()
 
+    print(
+        f"Block: {args.block}  |  n_seeds={args.n_seeds}\n"
+        f"device={args.device}  dtype={args.dtype}  model={args.model}  task={args.task}\n"
+        f"num_iters={args.num_iters}  val_every={args.val_every}  val_size={args.val_size}\n"
+        f"best_sigma={args.best_sigma}  best_lr={args.best_lr}\n"
+        f"variant={args.variant}  no_save={args.no_save}  out_dir={args.out_dir}"
+    )
+
     extra_base = {}
     if args.device:
         extra_base["device"] = args.device

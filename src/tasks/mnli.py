@@ -49,6 +49,9 @@ class MnliTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        return f'"{example["premise"]}"\n"{example["hypothesis"]}"'
+
     def predict(self, text: str) -> str | None:
         ent = _ENT.search(text)
         neu = _NEU.search(text)

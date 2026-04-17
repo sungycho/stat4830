@@ -43,6 +43,9 @@ class WscTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        return example["text"]
+
     def predict(self, text: str) -> str | None:
         yes = _YES.search(text)
         no = _NO.search(text)

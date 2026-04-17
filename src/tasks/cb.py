@@ -55,6 +55,9 @@ class CbTask(Task):
             "Answer:"
         )
 
+    def build_prompt_free(self, example):
+        return f'"{example["premise"]}"\n"{example["hypothesis"]}"'
+
     def label_words(self):
         return ["entailment", "contradiction", "neutral"]
 
