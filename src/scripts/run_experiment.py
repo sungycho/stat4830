@@ -170,7 +170,7 @@ BLOCKS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # CLI → train_es.py arg translation
 # ---------------------------------------------------------------------------
-_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize", "no_save": "--no-save"}
+_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize", "no_save": "--no-save", "no_chat_template": "--no-chat-template"}
 _ARG_MAP = {
     "task":            "--task",
     "model":           "--model",
@@ -253,7 +253,7 @@ def run_block(
 
     variants = block["variants"]
     if extra_base.get("variant"):
-        variants = [v for v in variants if variant_slug(v) == extra_base["variant"]]
+        variants = [v for v in variants if extra_base["variant"] in variant_slug(v)]
         if not variants:
             raise SystemExit(f"[error] No variant matching '{extra_base['variant']}' in block '{block_name}'")
     print(f"\n{'='*60}")
@@ -353,6 +353,8 @@ def parse_args():
                    help="Run only the variant with this label (e.g. N32)")
     p.add_argument("--no-save",    action="store_true", default=False,
                    help="Disable checkpoint saving for all runs (saves disk space)")
+    p.add_argument("--no-chat-template", action="store_true", default=False,
+                   help="Force skip chat template for all runs")
     return p.parse_args()
 
 
@@ -384,6 +386,8 @@ def main() -> None:
         extra_base["val_every"] = args.val_every
     if args.no_save:
         extra_base["no_save"] = True
+    if args.no_chat_template:
+        extra_base["no_chat_template"] = True
     if args.variant:
         extra_base["variant"] = args.variant
 

@@ -280,32 +280,67 @@ def eval_batch_ce(backend, examples: list[dict], task, prompt_cfg: PromptConfig,
     return sum(rewards) / len(rewards)
 
 
-def validate(backend, val_data: list[dict], task, batch_size: int,
-             prompt_cfg: PromptConfig, raw: bool, reward: str = "accuracy") -> float:
-    """Validate over the full val set, chunked into batched forward passes.
+def _gold_word_for_ce(label_words: list[str], score_ce_fn, example: dict) -> str:
+    """Find the gold label word for a CE example without knowing the task's internal mapping.
 
-    When reward='ce' and the task has label words, uses log-likelihood argmax for
-    accuracy (matching the paper's evaluation strategy for classification tasks).
-    Otherwise falls back to generation + regex scoring.
+    Probes score_ce_fn with a dummy log_probs where each word has its index as value.
+    score_ce_fn returns log_probs[correct_word], so the result is the correct word's index.
     """
+    dummy = {w: float(i) for i, w in enumerate(label_words)}
+    return label_words[int(round(score_ce_fn(dummy, example)))]
+
+
+def validate_with_dist(backend, val_data: list[dict], task, batch_size: int,
+                       prompt_cfg: PromptConfig, raw: bool, reward: str = "accuracy") -> dict:
+    """Validate over the full val set and collect per-gold-label prediction distributions.
+
+    Returns {"val_acc": float, "pred_by_gold": {gold: {pred: count}}, "gold_dist": {gold: count}}.
+
+    CE path: pred_by_gold uses label_words space (e.g. "great"/"terrible" for SST-2 mezo).
+             No parse_fail since argmax always yields a valid word.
+    Accuracy path: pred_by_gold uses task.predict()/gold_label() natural label strings.
+                   None from predict() maps to "parse_fail". val_acc still uses score_fn.
+    """
+    from collections import Counter
     use_ce_eval = reward == "ce" and prompt_cfg.label_words is not None
 
+    gold_dist: Counter = Counter()
+    pred_by_gold: dict[str, Counter] = {}
     correct = 0
+
     for i in range(0, len(val_data), batch_size):
         chunk = val_data[i:i + batch_size]
         prompts = [prompt_cfg.prompt_fn(ex) for ex in chunk]
         if use_ce_eval:
             log_probs_list = backend.score_logprobs_batch(prompts, prompt_cfg.label_words, raw=raw)
             for lp, ex in zip(log_probs_list, chunk):
+                gold = _gold_word_for_ce(prompt_cfg.label_words, prompt_cfg.score_ce_fn, ex)
+                pred = max(lp, key=lp.get)
                 correct_lp = prompt_cfg.score_ce_fn(lp, ex)
                 if correct_lp >= max(lp.values()) - 1e-9:
                     correct += 1
+                gold_dist[gold] += 1
+                pred_by_gold.setdefault(gold, Counter())[pred] += 1
         else:
             outputs = backend.generate_batch(prompts, raw=raw)
             for text, ex in zip(outputs, chunk):
+                gold = task.gold_label(ex)
+                pred = task.predict(text)
                 if prompt_cfg.score_fn(text, ex) > 0:
                     correct += 1
-    return correct / len(val_data)
+                gold_dist[gold] += 1
+                pred_by_gold.setdefault(gold, Counter())[pred if pred is not None else "parse_fail"] += 1
+
+    return {
+        "val_acc": correct / len(val_data),
+        "gold_dist": dict(gold_dist),
+        "pred_by_gold": {g: dict(c) for g, c in pred_by_gold.items()},
+    }
+
+
+def validate(backend, val_data: list[dict], task, batch_size: int,
+             prompt_cfg: PromptConfig, raw: bool, reward: str = "accuracy") -> float:
+    return validate_with_dist(backend, val_data, task, batch_size, prompt_cfg, raw, reward)["val_acc"]
 
 
 def run_es_iteration(
@@ -427,10 +462,21 @@ def main() -> None:
         f"chat_template={'auto-detect' if args.chat_template is None else args.chat_template} → active={not raw}\n"
         f"seed={args.seed}  early_stop_delta={args.early_stop_delta}  val_every={args.val_every}"
     )
+    _prompt_cfg_tmp = resolve_prompt_config(task, args.prompt_style)
+    use_ce_eval = args.reward == "ce" and _prompt_cfg_tmp.label_words is not None
+    if use_ce_eval:
+        _dist_labels = "/".join(_prompt_cfg_tmp.label_words)
+        print(f"[pred_dist] tracking ON — labels: {_dist_labels} (CE argmax)")
+    else:
+        _dist_labels = "/".join(task.label_words() or ["?"])
+        print(f"[pred_dist] tracking ON — labels: {_dist_labels} + parse_fail (from task.predict)")
 
-    baseline_acc = validate(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
+    baseline_result = validate_with_dist(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
+    baseline_acc = baseline_result["val_acc"]
     print(f"Baseline val_acc: {baseline_acc:.3f} ({int(baseline_acc * len(val_data))}/{len(val_data)})")
-    log_entry(log_path, {"event": "baseline", "val_acc": baseline_acc})
+    log_entry(log_path, {"event": "baseline", "val_acc": baseline_acc,
+                         "pred_by_gold": baseline_result["pred_by_gold"],
+                         "gold_dist": baseline_result["gold_dist"]})
 
     best_val_acc = run_state.get("best_val_acc", baseline_acc)
     start_iter = run_state.get("iteration", 0)
@@ -507,8 +553,11 @@ def main() -> None:
                 )
                 print(f"  [decomp] {decomp_summary}")
             else:
-                val_acc = validate(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
+                val_result = validate_with_dist(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
+                val_acc = val_result["val_acc"]
                 cumulative_total_fwd += len(val_data)
+                entry["pred_by_gold"] = val_result["pred_by_gold"]
+                entry["gold_dist"] = val_result["gold_dist"]
 
             entry["val_acc"] = val_acc
             entry["total_fwd"] = cumulative_total_fwd
@@ -534,6 +583,12 @@ def main() -> None:
                 break
 
         log_entry(log_path, entry)
+
+    try:
+        from src.scripts.plot_pred_dist_evolution import plot_evolution
+        plot_evolution(log_path, out_path=run_dir / "pred_dist_evolution.png")
+    except Exception as e:
+        print(f"[warn] Could not generate pred_dist_evolution plot: {e}")
 
     print(f"\nDone. Total: {time.perf_counter() - t_start:.1f}s | logs → {log_path}")
 

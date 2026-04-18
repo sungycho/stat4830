@@ -451,6 +451,7 @@ def main() -> None:
                 all_results.append({
                     "model_alias": model_alias,
                     "model_hf_id": hf_id,
+                    "checkpoint": Path(args.checkpoint).stem if args.checkpoint else None,
                     "task": task_name,
                     "prompt_style": args.prompt_style,
                     "chat_template_arg": args.chat_template,
