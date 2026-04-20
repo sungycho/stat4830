@@ -136,12 +136,23 @@ def evaluate(
                 parse_failures += 1
                 if len(failure_samples) < _MAX_FAILURE_SAMPLES:
                     failure_samples.append({
+                        "type": "parse_failure",
                         "gold": gold,
-                        "generated": repr(text),
-                        "prompt_tail": prompt[-120:],
+                        "pred": None,
+                        "generated": text,
+                        "prompt": prompt,
                     })
             elif pred == gold:
                 correct += 1
+            else:
+                if len(failure_samples) < _MAX_FAILURE_SAMPLES:
+                    failure_samples.append({
+                        "type": "wrong_answer",
+                        "gold": gold,
+                        "pred": pred,
+                        "generated": text,
+                        "prompt": prompt,
+                    })
             gold_dist[gold] += 1
             if gold not in pred_by_gold:
                 pred_by_gold[gold] = Counter()
@@ -225,6 +236,8 @@ def parse_args():
     )
     p.add_argument("--delete-cache", action="store_true", default=False,
                    help="Delete HuggingFace disk cache for each model after evaluation (saves disk space)")
+    p.add_argument("--show-failures", type=int, default=10, metavar="N",
+                   help="Print N failure examples (parse failures + wrong answers) after eval")
     p.add_argument("--checkpoint", default=None,
                    help="Path to a .pt checkpoint to load into the model after HF init. "
                         "Requires exactly one model alias (defines the architecture).")
@@ -447,6 +460,15 @@ def main() -> None:
                         n_gold = gold_dist[gold_lbl]
                         pred_str = "  ".join(f"{k}: {v/n_gold:.1%}" for k, v in sorted(preds.items()))
                         print(f"  [{gold_lbl}] → {pred_str}")
+
+                if args.show_failures > 0:
+                    samples = eval_result["parse_failure_samples"][:args.show_failures]
+                    print(f"\n  --- Failure examples (showing {len(samples)}) ---")
+                    for idx, s in enumerate(samples, 1):
+                        print(f"\n  [{idx}] type={s['type']}  gold={s['gold']}  pred={s['pred']}")
+                        print(f"  PROMPT:\n{s['prompt']}")
+                        print(f"  OUTPUT: {repr(s['generated'])}")
+                    print("  ---")
 
                 all_results.append({
                     "model_alias": model_alias,
