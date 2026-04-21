@@ -38,6 +38,7 @@ from src.utils.perturb import perturb_inplace, restore_inplace, es_grad_update
 
 _YES_RE = re.compile(r"\byes\b", re.IGNORECASE)
 _NO_RE  = re.compile(r"\bno\b",  re.IGNORECASE)
+_MAX_PARSE_FAIL_SAMPLES = 10
 
 
 def _classify_output(text: str, example: dict) -> str:
@@ -306,6 +307,7 @@ def validate_with_dist(backend, val_data: list[dict], task, batch_size: int,
 
     gold_dist: Counter = Counter()
     pred_by_gold: dict[str, Counter] = {}
+    parse_fail_samples: list[dict] = []
     correct = 0
 
     for i in range(0, len(val_data), batch_size):
@@ -323,18 +325,21 @@ def validate_with_dist(backend, val_data: list[dict], task, batch_size: int,
                 pred_by_gold.setdefault(gold, Counter())[pred] += 1
         else:
             outputs = backend.generate_batch(prompts, raw=raw)
-            for text, ex in zip(outputs, chunk):
+            for text, ex, prompt in zip(outputs, chunk, prompts):
                 gold = task.gold_label(ex)
                 pred = task.predict(text)
                 if prompt_cfg.score_fn(text, ex) > 0:
                     correct += 1
                 gold_dist[gold] += 1
                 pred_by_gold.setdefault(gold, Counter())[pred if pred is not None else "parse_fail"] += 1
+                if pred is None and len(parse_fail_samples) < _MAX_PARSE_FAIL_SAMPLES:
+                    parse_fail_samples.append({"gold": gold, "generated": repr(text), "prompt_tail": prompt[-120:]})
 
     return {
         "val_acc": correct / len(val_data),
         "gold_dist": dict(gold_dist),
         "pred_by_gold": {g: dict(c) for g, c in pred_by_gold.items()},
+        "parse_fail_samples": parse_fail_samples,
     }
 
 
@@ -474,9 +479,12 @@ def main() -> None:
     baseline_result = validate_with_dist(backend, val_data, task, args.batch_size, prompt_cfg, raw, reward=args.reward)
     baseline_acc = baseline_result["val_acc"]
     print(f"Baseline val_acc: {baseline_acc:.3f} ({int(baseline_acc * len(val_data))}/{len(val_data)})")
-    log_entry(log_path, {"event": "baseline", "val_acc": baseline_acc,
-                         "pred_by_gold": baseline_result["pred_by_gold"],
-                         "gold_dist": baseline_result["gold_dist"]})
+    baseline_log = {"event": "baseline", "val_acc": baseline_acc,
+                    "pred_by_gold": baseline_result["pred_by_gold"],
+                    "gold_dist": baseline_result["gold_dist"]}
+    if baseline_result["parse_fail_samples"]:
+        baseline_log["parse_fail_samples"] = baseline_result["parse_fail_samples"]
+    log_entry(log_path, baseline_log)
 
     best_val_acc = run_state.get("best_val_acc", baseline_acc)
     start_iter = run_state.get("iteration", 0)
@@ -558,6 +566,8 @@ def main() -> None:
                 cumulative_total_fwd += len(val_data)
                 entry["pred_by_gold"] = val_result["pred_by_gold"]
                 entry["gold_dist"] = val_result["gold_dist"]
+                if val_result["parse_fail_samples"]:
+                    entry["parse_fail_samples"] = val_result["parse_fail_samples"]
 
             entry["val_acc"] = val_acc
             entry["total_fwd"] = cumulative_total_fwd
