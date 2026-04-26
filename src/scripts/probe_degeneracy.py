@@ -34,7 +34,7 @@ import torch
 import torch.multiprocessing as mp
 
 from src.backends.factory import create_backend
-from src.tasks import get_task, available_tasks
+from src.tasks import get_task, available_tasks, PROMPT_STYLES, resolve_prompt_config
 from src.utils.perturb import perturb_inplace, restore_inplace
 from src.utils.seeds import set_seeds
 
@@ -54,7 +54,7 @@ def _resolve_dtype(dtype_arg: str, device: str) -> str:
 # ---------------------------------------------------------------------------
 
 def eval_batch_scores(
-    backend, prompts: list[str], examples: list[dict], task
+    backend, prompts: list[str], examples: list[dict], task, raw: bool = False
 ) -> tuple[float, list[float]]:
     """Evaluate binary accuracy reward over a batch.
 
@@ -62,7 +62,7 @@ def eval_batch_scores(
         mean_reward: mean score over the batch (float in [-1, 1] or [0, 1])
         per_example:  list of per-example task.score values (one per example)
     """
-    outputs = backend.generate_batch(prompts)
+    outputs = backend.generate_batch(prompts, raw=raw)
     scores = [task.score(out, ex) for out, ex in zip(outputs, examples)]
     return sum(scores) / len(scores), scores
 
@@ -93,6 +93,8 @@ def _worker(rank: int, args_ns, probe_pool: list, work_items: list, result_queue
     dtype = _resolve_dtype(args_ns.dtype, args_ns.device)
 
     task = get_task(args_ns.task)
+    prompt_cfg = resolve_prompt_config(task, getattr(args_ns, "prompt_style", "simple"))
+    raw = getattr(args_ns, "no_chat_template", False) or prompt_cfg.force_raw or task.prefer_base_prompt
 
     backend = create_backend(
         "hf",
@@ -116,14 +118,14 @@ def _worker(rank: int, args_ns, probe_pool: list, work_items: list, result_queue
     for i, (k_idx, seed_val, batch_indices) in enumerate(work_items):
         t_k    = time.perf_counter()
         batch   = [probe_pool[j] for j in batch_indices]
-        prompts = [task.build_prompt(ex) for ex in batch]
+        prompts = [prompt_cfg.prompt_fn(ex) for ex in batch]
 
         # ---- 3-perturb trick ----
         perturb_inplace(model, seed_val, args_ns.sigma, sign=+1)
-        r_plus, x_plus = eval_batch_scores(backend, prompts, batch, task)
+        r_plus, x_plus = eval_batch_scores(backend, prompts, batch, task, raw=raw)
 
         perturb_inplace(model, seed_val, 2 * args_ns.sigma, sign=-1)
-        r_minus, x_minus = eval_batch_scores(backend, prompts, batch, task)
+        r_minus, x_minus = eval_batch_scores(backend, prompts, batch, task, raw=raw)
 
         restore_inplace(model, seed_val, args_ns.sigma, sign=-1)
         # -------------------------
@@ -284,8 +286,10 @@ def run_probe(args):
         do_sample=False,
     )
     task_p0 = get_task(args.task)
-    base_prompts = [task_p0.build_prompt(ex) for ex in probe_pool]
-    _, base_scores = eval_batch_scores(backend_p0, base_prompts, probe_pool, task_p0)
+    prompt_cfg_p0 = resolve_prompt_config(task_p0, getattr(args, "prompt_style", "simple"))
+    raw_p0 = getattr(args, "no_chat_template", False) or prompt_cfg_p0.force_raw or task_p0.prefer_base_prompt
+    base_prompts = [prompt_cfg_p0.prompt_fn(ex) for ex in probe_pool]
+    _, base_scores = eval_batch_scores(backend_p0, base_prompts, probe_pool, task_p0, raw=raw_p0)
     p0 = sum(1.0 for s in base_scores if s > 0) / len(base_scores)
 
     # --- rho: batch-level ---
@@ -419,6 +423,10 @@ def parse_args():
                         "Use 4-8 on an 80GB GPU with Qwen-0.5B.")
     p.add_argument("--output",       default=None,
                    help="Path to save JSON results")
+    p.add_argument("--prompt-style", default="simple", choices=PROMPT_STYLES,
+                   help="Prompt template style (simple/mezo/free)")
+    p.add_argument("--no-chat-template", action="store_true", default=False,
+                   help="Skip chat template (use for base/uninstructed models)")
     return p.parse_args()
 
 

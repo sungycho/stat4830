@@ -220,17 +220,20 @@ def log_entry(log_path: Path, entry: dict) -> None:
 def save_checkpoint(model, path: Path, run_state: dict | None = None) -> None:
     torch.save(model.state_dict(), path)
     if run_state is not None:
+        v, internalstate, gauss = random.getstate()
         state_path = path.with_suffix(".state.json")
         with open(state_path, "w") as f:
-            json.dump(run_state, f)
+            json.dump({
+                **run_state,
+                "_rng_torch_cpu": torch.get_rng_state().tolist(),
+                "_rng_python_version": v,
+                "_rng_python_state": list(internalstate),
+                "_rng_python_gauss": gauss,
+            }, f)
 
 
 def load_run_state(checkpoint_path: str) -> dict:
-    """Load saved run state (iteration, best_val_acc) alongside a checkpoint.
-
-    Returns empty dict if no state file exists (weights-only warm start).
-    Note: RNG state is not saved, so exact episode replay is not guaranteed.
-    """
+    """Load saved run state (iteration, best_val_acc) alongside a checkpoint."""
     state_path = Path(checkpoint_path).with_suffix(".state.json")
     if state_path.exists():
         with open(state_path) as f:
@@ -325,13 +328,23 @@ def validate_with_dist(backend, val_data: list[dict], task, batch_size: int,
                 pred_by_gold.setdefault(gold, Counter())[pred] += 1
         else:
             outputs = backend.generate_batch(prompts, raw=raw)
+            lw = task.label_words()  # None for generation tasks (GSM8K, etc.)
             for text, ex, prompt in zip(outputs, chunk, prompts):
                 gold = task.gold_label(ex)
                 pred = task.predict(text)
-                if prompt_cfg.score_fn(text, ex) > 0:
+                score_val = prompt_cfg.score_fn(text, ex)
+                if score_val > 0:
                     correct += 1
+                # Distribution label: classification → specific label string;
+                # generation → correct / wrong_number / parse_fail
+                if pred is None:
+                    dist_label = "parse_fail"
+                elif lw is not None:
+                    dist_label = pred
+                else:
+                    dist_label = "correct" if score_val > 0 else "wrong_number"
                 gold_dist[gold] += 1
-                pred_by_gold.setdefault(gold, Counter())[pred if pred is not None else "parse_fail"] += 1
+                pred_by_gold.setdefault(gold, Counter())[dist_label] += 1
                 if pred is None and len(parse_fail_samples) < _MAX_PARSE_FAIL_SAMPLES:
                     parse_fail_samples.append({"gold": gold, "generated": repr(text), "prompt_tail": prompt[-120:]})
 
@@ -451,7 +464,16 @@ def main() -> None:
         backend.model.load_state_dict(ckpt)
         run_state = load_run_state(args.resume_from)
         if run_state:
-            print(f"Resumed from: {args.resume_from} | iter={run_state.get('iteration', 0)} best_val={run_state.get('best_val_acc', 'n/a')}")
+            if "_rng_torch_cpu" in run_state:
+                torch.set_rng_state(torch.tensor(run_state["_rng_torch_cpu"], dtype=torch.uint8))
+                random.setstate((
+                    run_state["_rng_python_version"],
+                    tuple(run_state["_rng_python_state"]),
+                    run_state["_rng_python_gauss"],
+                ))
+                print(f"Resumed from: {args.resume_from} | iter={run_state.get('iteration', 0)} best_val={run_state.get('best_val_acc', 'n/a')} | RNG restored")
+            else:
+                print(f"Resumed from: {args.resume_from} | iter={run_state.get('iteration', 0)} best_val={run_state.get('best_val_acc', 'n/a')} | [warn] no RNG state in checkpoint")
         else:
             print(f"Warm-started weights from: {args.resume_from} (no run state found — iteration/best reset)")
 

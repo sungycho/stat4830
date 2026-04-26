@@ -62,6 +62,15 @@ class Gsm8kTask(Task):
             "Solution:"
         )
 
+    def predict(self, text: str) -> str | None:
+        """Return extracted number string, or None for parse failure."""
+        num = _extract_pred_number(text)
+        return str(num) if num is not None else None
+
+    def gold_label(self, example: dict) -> str:
+        gold = _extract_gold_answer(example["answer"])
+        return str(gold) if gold is not None else "?"
+
     def score(self, text, example):
         gold = _extract_gold_answer(example["answer"])
         if gold is None:
