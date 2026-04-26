@@ -50,7 +50,20 @@ class MnliTask(Task):
         )
 
     def build_prompt_free(self, example):
-        return f'"{example["premise"]}"\n"{example["hypothesis"]}"'
+        return (
+            'Premise: "The woman is playing tennis outdoors."\n'
+            'Hypothesis: "A person is engaged in a sport."\n'
+            "Answer (entailment, neutral, or contradiction): entailment\n\n"
+            'Premise: "Two men are cooking steaks on a grill."\n'
+            'Hypothesis: "The men are vegetarians."\n'
+            "Answer (entailment, neutral, or contradiction): contradiction\n\n"
+            'Premise: "She bought a new dress for the event."\n'
+            'Hypothesis: "She spent more than fifty dollars."\n'
+            "Answer (entailment, neutral, or contradiction): neutral\n\n"
+            f'Premise: "{example["premise"]}"\n'
+            f'Hypothesis: "{example["hypothesis"]}"\n'
+            "Answer:"
+        )
 
     def predict(self, text: str) -> str | None:
         ent = _ENT.search(text)
