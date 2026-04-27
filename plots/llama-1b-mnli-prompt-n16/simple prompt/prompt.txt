@@ -1,0 +1,5 @@
+            f'Premise: "{example["premise"]}"\n'
+            f'Hypothesis: "{example["hypothesis"]}"\n'
+            f"Does the premise entail the hypothesis, "
+            f"contradict it, or is it neutral?\n"
+            f"Answer entailment, contradiction, or neutral:"

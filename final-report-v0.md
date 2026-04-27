@@ -123,7 +123,7 @@ Sufficient population size is necessary but not sufficient for ES success. The *
 | GSM8K example | Correct reasoning steps, arithmetic error | "The answer is the answer." |
 | MNLI example | — | Predicts "contradiction" for every input |
 | Gradient structure | Systematic across examples | Orthogonal across examples; batch gradient $\approx 0$ |
-| ES outcome | Improvement with sufficient $N$ | Noise-determined collapse; permanent exit |
+| ES outcome | Improvement with sufficient $N$ | Collapse regardless of $N$ |
 
 The key difference is whether errors share a common direction in parameter space. In the benign regime, many examples fail for the same structural reason (e.g., a systematic bias toward wrong-number outputs), and the ES gradient can identify and correct that direction. In the malignant regime, errors are structurally heterogeneous — each example fails for a different reason — and the batch gradient is approximately zero.
 
@@ -142,23 +142,25 @@ This probe requires approximately 2 KB of forward passes and can be run before c
 
 ### 6.3 Empirical Evidence
 
-**Benign regime.** Figure 2a shows Qwen2.5-1.5B on WiC: the model makes format-correct but semantically wrong predictions at initialization, and ES consistently improves accuracy. The gradient has systematic structure because errors share a common semantic direction.
+**Benign regime.** Figure 2a shows Qwen2.5-1.5B on GSM8K across $N \in \{1, 2, 8, 16\}$ (mean ± std over seeds 42/43/44). All variants improve over the ~40% initialization baseline. With $N \geq 8$ accuracy rises consistently to ~50%; even $N=1$ improves, though with higher variance. The gradient has systematic structure because errors share a common direction — the model produces plausible reasoning but commits arithmetic mistakes — so ES can identify and reinforce the correct output class.
 
-![Figure 2a: Qwen2.5-1.5B on WiC (benign regime). ES fine-tuning improves steadily — systematic errors provide learnable gradient signal.](results/wic_qwen.png)
+![Figure 2a: Qwen2.5-1.5B on GSM8K (benign regime). All population sizes improve over the baseline; $N \geq 8$ provides stable, low-variance gains consistent with systematic arithmetic errors supplying learnable gradient signal.](plots/pop-scale-bin-qwen-1.5b-gsm8k.png)
 
-**Malignant regime.** Figure 2b shows LLaMA-3.2-1B on BoolQ: the model is fundamentally unable to engage with the task at initialization, and all ES runs collapse regardless of $N$.
+**Malignant regime.** Figure 2b shows Qwen2.5-1.5B on WiC ($N=32$, normalization on, seed 42). Despite an initial transient rise to ~60% accuracy above the 50% random baseline, accuracy catastrophically collapses to near zero after roughly 75K training forward passes and never recovers. The brief initial rise does not reflect stable gradient-driven learning: once the model drifts outside the performant parameter region, no gradient signal exists to return it (Section 6.4).
 
-![Figure 2b: LLaMA-3.2-1B on BoolQ (malignant regime). ES collapses regardless of population size — no recoverable gradient signal exists.](docs/empircal_plots/Llama-3.2-1B-BoolQ.png)
+![Figure 2b: Qwen2.5-1.5B on WiC (malignant regime). An initial transient rise above baseline is followed by catastrophic, unrecoverable collapse to near-zero accuracy — characteristic of the ES-malignant regime.](plots/n32-bin-qwen-1.5b-wic.png)
 
-**Noise-determined attractor selection.** In our MNLI experiments with LLaMA-3.2-1B, all runs collapsed — but to *different* labels depending on $N$: $N=8$ consistently predicted "contradiction" while $N=2$ predicted "neutral," both starting from the same initialization. With no systematic gradient signal, each run executes a random walk in parameter space; the particular attractor reached depends on which random direction dominated early steps — a function of $N$ and the seed. To our knowledge, this is the first documented instance of noise-determined attractor selection in LLM fine-tuning.
+**Noise-determined attractor selection.** In LLaMA-3.2-1B on MNLI (all at $N=16$), every prompt variant collapsed — but to different absorbing states set by the prompt's initial prediction bias. A simple prompt produced near-total parse failures (89–97% unparseable) throughout. Hint prompts that biased initial predictions toward neutral collapsed within a few checkpoints to ~99–100% neutral for all gold labels. The complex prompt, initially biased toward contradiction, converged to ~88–91% contradiction across all gold labels regardless of gold label (Figure 2c). No attractor was gradient-selected; the collapse destination was determined by which class dominated the initial output distribution, not the reward. The same phenomenon appears with $N$ as the varying factor in SST-2: $N=1$ eliminates ~42% parse failures and reaches ~90% accuracy, while $N=16$ collapses to predicting "positive" for 100% of examples.
 
-**Regime summary.**
+![Figure 2c: LLaMA-3.2-1B on MNLI (complex prompt, N=16). All three gold-label classes collapse to ~88–91% contradiction — the model's initial contradiction bias determines the absorbing attractor regardless of true label.](plots/llama-1b-mnli-prompt-n16/complex-prompt/pred_dist_evolution.png)
 
-| Model | Task | $\rho$ | Regime | ES outcome |
+**Regime summary.** The $\rho$ diagnostic — $\rho = \text{Corr}(R(\theta+\sigma\varepsilon,B),\, R(\theta-\sigma\varepsilon,B))$ — measures how correlated the rewards of two antithetic perturbations are at initialization. Moderate $\rho \in [0.3, 0.7]$ means perturbations produce meaningfully different outcomes: ES-benign. Extreme values indicate absent gradient signal: near zero ("chaotic," predictions flip randomly) or near one ("frozen," predictions never change) — both ES-malignant. The three model/task pairs studied span all three regimes:
+
+| Model / Task | $\rho$ | $\rho$ regime | Failure mode at initialization | ES outcome |
 |---|---|---|---|---|
-| Qwen2.5-1.5B | GSM8K | 0.42 | Benign | Improves ($N \geq 8$) |
-| Qwen2.5-1.5B | WiC | 0.38 | Benign | Improves |
-| LLaMA-3.2-1B | MNLI | 0.94 | Malignant | Collapses (noise-determined label) |
+| LLaMA-3.2-1B / MNLI | 0.04 | Very low (chaotic) | Repeats prompt; random, unparseable outputs | Malignant |
+| Qwen2.5-1.5B / GSM8K | 0.42 | Moderate | Correct format, wrong numbers | **Benign** |
+| Qwen2.5-1.5B / WiC | 0.88 | Very high (frozen) | Predicts same label for every input | Malignant |
 
 ### 6.4 Theoretical Grounding
 
@@ -217,13 +219,28 @@ This finding has a first-order analogue. NGRPO, PAPO, RC-GRPO, and GDPO each ind
 
 ### 7.5 The N=4 Case
 
-The $N=4$ case illuminates the transition between the pathological $N=2$ regime and the safe $N \geq 8$ regime. With four seeds, the sample standard deviation has three degrees of freedom — more stable than $N=2$'s single degree of freedom, but still noisier than $N=30$.
+The $N=4$ case admits the same algebraic argument as $N=2$. Consider the concrete scenario where one seed is informative and three are near-zero: $A_1 = c$, $A_2 = A_3 = A_4 = 0$. Then:
 
-Figure 5 shows the answer distribution evolution for $N=4$: the model does not catastrophically collapse as at $N=2$ with normalization on, but nor does it recover as cleanly as norm-off $N=2$. Improvement is visible but slower and noisier than $N=8$, suggesting the normalization pathology fades *gradually* as $N$ increases past 4, rather than disappearing at a sharp threshold.
+$$\bar{A} = \frac{c}{4}, \qquad \hat{\sigma}_A = \sqrt{\frac{(3c/4)^2 + 3\,(c/4)^2}{3}} = \sqrt{\frac{c^2}{4}} = \frac{c}{2}$$
+
+$$\tilde{A}_1 = \frac{c - c/4}{c/2} = \frac{3}{2}, \qquad \tilde{A}_2 = \tilde{A}_3 = \tilde{A}_4 = \frac{0 - c/4}{c/2} = -\frac{1}{2}$$
+
+Again $c$ has cancelled. The one signal direction receives a fixed push of $3/2$ regardless of actual signal magnitude; the three near-zero seeds each contribute $-1/2$ in their random directions. Similarly for all other mixed configurations at $N=4$:
+
+| Informative seeds | Near-zero seeds | Signal weights | Zero weights |
+|---|---|---|---|
+| 1 | 3 | $+3/2$ | $-1/2$ each |
+| 2 | 2 | $+\sqrt{3}/2$ each | $-\sqrt{3}/2$ each |
+| 3 | 1 | $+1/2$ each | $-3/2$ |
+| 4 | 0 | — | — (degenerate: $\hat{\sigma}_A = 0$) |
+
+The pathology is symmetric: as more seeds carry signal, the zero seeds absorb a proportionally larger negative weight. In every mixed case normalization removes scale information entirely — the gradient update magnitude carries no information about how strong the signal actually was.
+
+The difference from $N=2$ is degree, not kind: at $N=2$ both advantages collapse to exactly $\pm 1/\sqrt{2}$; at $N=4$ the same collapse requires at least one near-zero seed among four, a condition that becomes more common as SNR decreases. Figure 5 illustrates this intermediate behavior: unlike $N=2$ with normalization on the model does not catastrophically collapse, but it does not recover as cleanly as norm-off $N=2$ either.
 
 ![Figure 5: Answer distribution evolution, Qwen2.5-1.5B on GSM8K, N=4. Intermediate behavior between N=2 with normalization (collapse) and N≥8 (stable improvement).](results/seed43_pop_scale/gsm8k_n4_s2/pred_dist_evolution.png)
 
-In practice: **disable normalization at $N \leq 4$**, or use a clipped-std estimator $\hat{\sigma}_A \leftarrow \max(\hat{\sigma}_A,\, \varepsilon_0)$ with a positive floor $\varepsilon_0 > 0$. For $N \geq 8$, standard normalization is safe.
+In practice: **disable normalization at $N \leq 4$**.
 
 ---
 
