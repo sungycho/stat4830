@@ -49,15 +49,15 @@ Three axes jointly determine ES behavior in practice: the **reward function** $R
 
 ## 3. Related Work
 
-**Memory-efficient zeroth-order methods.** MeZO (Malladi et al., 2023) introduced in-place single-seed ($N=1$) ZO fine-tuning using cross-entropy reward, achieving up to 12× memory reduction with performance competitive with backpropagation. Sparse MeZO (Liu et al., 2024) applies ZO only to a sparse parameter subset, yielding a 9% accuracy gain over MeZO on RTE; MeZO-SVRG (Gautam et al., 2024) couples ZO with variance reduction for improved convergence; HiZOO (Zhao et al., 2024) incorporates a diagonal Hessian preconditioner for 8× speedup; DeepZero (Chen et al., 2023) scales ZO to training deep networks from scratch via coordinate-wise gradient estimation. Zhang et al. (2024) provide a systematic benchmark of ZO methods for LLM fine-tuning. All of these works rely on continuous reward or logit-based proxies.
+**Foundational ZO fine-tuning.** MeZO (Malladi et al., 2023) introduced in-place single-seed zeroth-order fine-tuning of LLMs, reducing peak memory by up to 12× while matching backpropagation on several NLP benchmarks under cross-entropy reward. ES at Scale (Qiu et al., 2025) extended this line to binary accuracy reward using antithetic ES with large populations, demonstrating successful fine-tuning of billion-parameter models. These two works establish the core algorithmic framework that subsequent methods build on.
 
-**ES-based LLM fine-tuning.** ES at Scale (Qiu et al., 2025) demonstrated the first successful antithetic ES fine-tuning of billion-parameter LLMs under binary accuracy reward, finding $N \approx 30$ necessary. Subsequent work reduced computational cost: EGGROLL (Sarkar et al., 2025) structures perturbations as low-rank matrices for higher arithmetic intensity; ESSA (Korotyshova et al., 2025) applies ES to SVD-compressed LoRA adapters, enabling INT4/INT8 inference-time fine-tuning; BSZO (Feng & Huang, 2026) uses Bayesian subspace optimization with Kalman filtering across perturbation directions; Hi-ZFO (Jin & Tan, 2026) hybridizes ZO and first-order updates via layer-wise importance profiling; ESSAM (Sun et al., 2026) extends the ES-at-Scale framework with additional alignment targets. None of these papers explain *why* $N \approx 30$ is necessary under binary reward.
+**Efficiency via low-rank and PEFT.** A cluster of follow-on work improves per-sample efficiency by restricting perturbations to lower-dimensional subspaces. EGGROLL (Sarkar et al., 2025) structures perturbations as low-rank matrices for higher arithmetic intensity; ESSA (Korotyshova et al., 2025) applies ES to SVD-compressed LoRA adapters, enabling INT4/INT8 deployment; Sparse MeZO (Liu et al., 2024) applies ZO updates only to a sparse parameter subset; Hi-ZFO (Jin & Tan, 2026) selects parameter groups via layer-wise importance profiling, hybridizing ZO with first-order updates.
 
-**Population dynamics and dimensionality.** The Blessing of Dimensionality (Liang et al., 2026) provides a variance-curvature analysis showing that the effective rank of the fine-tuning Hessian is $r \approx O(100) \ll d$, explaining why $N \approx 30$ is tractable despite billions of parameters. The same work documents a rise-then-decay phenomenon in training reward under fixed hyperparameters, observed across ES, GRPO, and PPO. Neural Thickets (Gan & Isola, 2026) shows that in well-pretrained models, task-specific parameter vectors are densely distributed in the neighborhood of the pretrained weights, motivating parallel sampling-based post-training methods.
+**Accuracy improvements via adaptive components.** Other work improves convergence quality by adding curvature information or memory into the update rule. HiZOO (Zhao et al., 2024) incorporates a diagonal Hessian preconditioner; BSZO (Feng & Huang, 2026) uses Bayesian subspace optimization with Kalman filtering over perturbation directions; MeZO-SVRG (Gautam et al., 2024) couples ZO with variance reduction; ESSAM (Sun et al., 2026) extends ES with additional alignment objectives; DeepZero (Chen et al., 2023) scales ZO to deep-network training via coordinate-wise gradient estimation.
 
-**Reward normalization pathology.** Several concurrent GRPO-based works — NGRPO (Kimi Team), PAPO, RC-GRPO, and GDPO — independently found that z-score normalization causes the GRPO gradient to vanish under homogeneous within-group rewards. Our work identifies the ES-side analogue and provides a signal-to-noise analysis that unifies both observations.
+**Population dynamics and dimensionality.** The Blessing of Dimensionality (Liang et al., 2026) provides a variance-curvature analysis establishing that the effective Hessian rank $r \approx O(100) \ll d$ makes ES tractable despite billions of parameters, and documents a rise-then-decay phenomenon in training reward observed across ES, GRPO, and PPO. Neural Thickets (Gan & Isola, 2026) shows that task-specific parameter vectors are densely distributed near pretrained weights, motivating parallel sampling-based post-training methods.
 
-**What this paper adds.** Prior work holds either the reward (CE or binary) or $N$ fixed. We vary both systematically and identify a reward-aware framework that explains the MeZO/ES-at-Scale divergence. We also document noise-determined attractor selection — same initialization, different $N$, different collapse labels — which to our knowledge has no prior recorded instance in the LLM fine-tuning literature.
+**What this paper adds.** The works above vary either the reward type or population size, but not both jointly. We vary both systematically, identifying a reward-aware framework that characterizes when population size matters. We additionally distinguish two qualitatively distinct base-model failure regimes and document noise-determined attractor selection — observations with no prior recorded precedent in the LLM fine-tuning literature.
 
 ---
 
@@ -91,7 +91,7 @@ However, CE reward requires per-token log-probabilities — white-box model acce
 
 **Empirical validation.** Figure 1a shows OPT-13B on BoolQ with CE reward across $N \in \{1, 8, 16\}$. Training curves are nearly indistinguishable — consistent with N-agnostic gradient signal under CE.
 
-![Figure 1a: OPT-13B fine-tuned on BoolQ with cross-entropy reward. Population size has negligible effect, consistent with CE reward's N-agnostic property.](docs/empircal_plots/OPT13B-BoolQ.png)
+![Figure 1a: OPT-13B fine-tuned on SST2 with cross-entropy reward. Population size has negligible effect, consistent with CE reward's N-agnostic property.](plots/pop-scale-ce-opt-13b-sst2.png)
 
 ### 5.3 Binary Reward: N-Sensitive
 
@@ -388,7 +388,5 @@ Qiu, X., Gan, Y., Hayes, C. F., Liang, Q., Xu, Y., Dailey, R., Meyerson, E., Hod
 Sarkar, B., Fellows, M., Duque, J. A., et al. (2025). EGGROLL: Evolution guided general optimization via low-rank learning. *Preprint*.
 
 Sun, M., et al. (2026). ESSAM. *Preprint*.
-
-Zhang, Y., Li, P., Hong, J., et al. (2024). Revisiting zeroth-order optimization for memory-efficient LLM fine-tuning: A benchmark. *ICML 2024*.
 
 Zhao, Y., Dang, S., Ye, H., Dai, G., Qian, Y., & Tsang, I. W. (2024). HiZOO: A Hessian informed zeroth-order optimizer for LLMs. *ICLR 2025*.

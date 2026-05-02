@@ -1,8 +1,9 @@
 """Evaluate model accuracy on a task over N samples.
 
 Usage:
-  uv run python -m src.scripts.eval_accuracy --task gsm8k --model Qwen/Qwen2.5-0.5B-Instruct
-  uv run python -m src.scripts.eval_accuracy --task boolq --model Qwen/Qwen2.5-1.5B-Instruct --n 200
+  uv run python -m src.scripts.adhoc.eval_accuracy --task gsm8k --model Qwen/Qwen2.5-0.5B-Instruct
+  uv run python -m src.scripts.adhoc.eval_accuracy --task boolq --model Qwen/Qwen2.5-1.5B-Instruct --n 200
+  uv run python -m src.scripts.adhoc.eval_accuracy --task sst2  --model facebook/opt-13b --prompt-style complex --no-chat-template
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from pathlib import Path
 import torch
 
 from src.backends.factory import create_backend
-from src.tasks import get_task, available_tasks
+from src.tasks import get_task, available_tasks, PROMPT_STYLES, resolve_prompt_config
 from src.utils.seeds import set_seeds
 
 
@@ -29,9 +30,12 @@ def run_eval(args):
     dtype = _resolve_dtype(args.dtype, args.device)
 
     task = get_task(args.task)
+    prompt_cfg = resolve_prompt_config(task, args.prompt_style)
+    raw = args.no_chat_template or prompt_cfg.force_raw or task.prefer_base_prompt
+
     train_data, _ = task.load_data(train_size=args.n, val_size=0, seed=args.seed)
     examples = train_data[:args.n]
-    print(f"[eval] task={args.task}  model={args.model}  n={len(examples)}  dtype={dtype}")
+    print(f"[eval] task={args.task}  model={args.model}  n={len(examples)}  dtype={dtype}  prompt_style={args.prompt_style}  raw={raw}")
 
     backend = create_backend(
         "hf",
@@ -42,11 +46,11 @@ def run_eval(args):
         do_sample=False,
     )
 
-    prompts = [task.build_prompt(ex) for ex in examples]
+    prompts = [prompt_cfg.prompt_fn(ex) for ex in examples]
 
     print(f"[eval] running inference on {len(prompts)} examples...")
-    outputs = backend.generate_batch(prompts)
-    scores  = [task.score(out, ex) for out, ex in zip(outputs, examples)]
+    outputs = backend.generate_batch(prompts, raw=raw)
+    scores  = [prompt_cfg.score_fn(out, ex) for out, ex in zip(outputs, examples)]
 
     n_correct = sum(1 for s in scores if s > 0)
     accuracy  = n_correct / len(scores)
@@ -61,13 +65,24 @@ def run_eval(args):
             print(f"  [{i+1:3d}] {label}  output: {out[:80]!r}")
 
     results = {
-        "model":    args.model,
-        "task":     args.task,
-        "n":        len(scores),
-        "seed":     args.seed,
-        "accuracy": accuracy,
+        "args": {
+            "model":           args.model,
+            "task":            args.task,
+            "n":               args.n,
+            "prompt_style":    args.prompt_style,
+            "no_chat_template": args.no_chat_template,
+            "max_new_tokens":  args.max_new_tokens,
+            "seed":            args.seed,
+            "dtype":           args.dtype,
+            "device":          args.device,
+        },
+        "model":     args.model,
+        "task":      args.task,
+        "n":         len(scores),
+        "seed":      args.seed,
+        "accuracy":  accuracy,
         "n_correct": n_correct,
-        "scores":   scores,
+        "scores":    scores,
     }
 
     if args.output:
@@ -87,17 +102,21 @@ def run_eval(args):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Evaluate model accuracy on a task")
-    p.add_argument("--task",           required=True, choices=available_tasks())
-    p.add_argument("--model",          default="Qwen/Qwen2.5-0.5B-Instruct")
-    p.add_argument("--n",              type=int, default=500,
+    p.add_argument("--task",            required=True, choices=available_tasks())
+    p.add_argument("--model",           default="Qwen/Qwen2.5-0.5B-Instruct")
+    p.add_argument("--n",               type=int, default=500,
                    help="Number of examples to evaluate")
-    p.add_argument("--max-new-tokens", type=int, default=256)
-    p.add_argument("--device",         default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--dtype",          default="auto",
+    p.add_argument("--prompt-style",    default="simple", choices=PROMPT_STYLES,
+                   help="Prompt template style (simple/complex/mezo/free)")
+    p.add_argument("--no-chat-template", action="store_true", default=False,
+                   help="Skip chat template wrapping (use for base/uninstructed models)")
+    p.add_argument("--max-new-tokens",  type=int, default=256)
+    p.add_argument("--device",          default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--dtype",           default="auto",
                    choices=["auto", "float32", "float16", "bfloat16"])
-    p.add_argument("--seed",           type=int, default=42)
-    p.add_argument("--output",         default=None)
-    p.add_argument("--verbose",        action="store_true",
+    p.add_argument("--seed",            type=int, default=42)
+    p.add_argument("--output",          default=None)
+    p.add_argument("--verbose",         action="store_true",
                    help="Print per-example outputs")
     return p.parse_args()
 

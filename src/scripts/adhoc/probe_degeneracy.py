@@ -358,6 +358,21 @@ def run_probe(args):
 
     # --- save results ---
     results = {
+        "args": {
+            "model":           args.model,
+            "task":            args.task,
+            "sigma":           args.sigma,
+            "K":               args.K,
+            "batch_size":      args.batch_size,
+            "probe_size":      args.probe_size,
+            "max_new_tokens":  args.max_new_tokens,
+            "device":          args.device,
+            "dtype":           args.dtype,
+            "seed":            args.seed,
+            "num_workers":     args.num_workers,
+            "prompt_style":    getattr(args, "prompt_style", "simple"),
+            "no_chat_template": getattr(args, "no_chat_template", False),
+        },
         "model":                        args.model,
         "task":                         args.task,
         "sigma":                        args.sigma,
