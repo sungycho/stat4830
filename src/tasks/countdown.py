@@ -144,6 +144,13 @@ class CountdownTask(Task):
             f"final answer in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>."
         )
 
+    def gold_label(self, example: dict) -> str:
+        return "expression"
+
+    def predict(self, text: str) -> str | None:
+        matches = _ANSWER_RE.findall(text)
+        return matches[-1].strip() if matches else None
+
     def score(self, text: str, example: dict) -> float:
         """Binary accuracy: +1.0 if answer is correct, -1.0 otherwise.
 

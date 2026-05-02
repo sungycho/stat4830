@@ -56,6 +56,13 @@ class SquadTask(Task):
             "Answer:"
         )
 
+    def gold_label(self, example: dict) -> str:
+        return "span"
+
+    def predict(self, text: str) -> str | None:
+        norm = _normalize(text)
+        return norm if norm else None
+
     def score(self, text, example):
         pred = _normalize(text)
         if not pred:

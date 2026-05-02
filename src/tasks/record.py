@@ -45,6 +45,13 @@ class RecordTask(Task):
             "Entity:"
         )
 
+    def gold_label(self, example: dict) -> str:
+        return "entity"
+
+    def predict(self, text: str) -> str | None:
+        pred = text.strip()
+        return pred if pred else None
+
     def score(self, text, example):
         pred = text.strip().lower()
         if not pred:

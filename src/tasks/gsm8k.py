@@ -68,8 +68,7 @@ class Gsm8kTask(Task):
         return str(num) if num is not None else None
 
     def gold_label(self, example: dict) -> str:
-        gold = _extract_gold_answer(example["answer"])
-        return str(gold) if gold is not None else "?"
+        return "number"
 
     def score(self, text, example):
         gold = _extract_gold_answer(example["answer"])

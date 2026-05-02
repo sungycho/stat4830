@@ -64,6 +64,16 @@ class Math500Task(Task):
             "Solution:"
         )
 
+    def gold_label(self, example: dict) -> str:
+        return "math"
+
+    def predict(self, text: str) -> str | None:
+        boxed = _extract_boxed(text)
+        if boxed is not None:
+            return boxed
+        nums = _NUMBERS.findall(text)
+        return nums[-1] if nums else None
+
     def score(self, text, example):
         gold_boxed = _extract_boxed(example["solution"])
         if gold_boxed is None:
