@@ -65,7 +65,7 @@ class CbTask(Task):
         correct = _LABEL_MAP[example["label"]]
         return log_probs[correct]
 
-    def score(self, text, example):
+    def predict(self, text: str) -> str | None:
         ent = _ENT.search(text)
         con = _CON.search(text)
         neu = _NEU.search(text)
@@ -76,8 +76,16 @@ class CbTask(Task):
         ]
         hits = [h for h in hits if h is not None]
         if not hits:
+            return None
+        return min(hits, key=lambda h: h[0])[1]
+
+    def gold_label(self, example: dict) -> str:
+        return _LABEL_MAP[example["label"]]
+
+    def score(self, text, example):
+        pred = self.predict(text)
+        if pred is None:
             return -1.0
-        pred = min(hits, key=lambda h: h[0])[1]
         gold = _LABEL_MAP[example["label"]]
         return 1.0 if pred == gold else -1.0
 

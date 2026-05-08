@@ -39,12 +39,10 @@ class Math500Task(Task):
         test = ds["test"].shuffle(seed=seed)
         total = min(train_size + val_size, len(test))
         sel = test.select(range(total))
-        train = [dict(ex) for ex in sel.select(
-            range(min(train_size, total))
-        )]
-        val = [dict(ex) for ex in sel.select(
-            range(min(train_size, total), total)
-        )]
+        train_end = min(train_size, total)
+        train = [dict(ex) for ex in sel.select(range(train_end))]
+        # avoid passing an empty range to select() — HuggingFace validates start < len even for length-0 slices
+        val = [dict(ex) for ex in sel.select(range(train_end, total))] if train_end < total else []
         return train, val
 
     def build_prompt(self, example):

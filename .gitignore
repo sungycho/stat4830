@@ -281,3 +281,5 @@ docs/theory_es_scaling.md
 *.synctex.gz
 
 docs/draft-v2.tex
+
+docs/neurips-format

@@ -617,7 +617,7 @@ def main() -> None:
         log_entry(log_path, entry)
 
     try:
-        from src.scripts.plot_pred_dist_evolution import plot_evolution
+        from src.scripts.adhoc.plot_pred_dist_evolution import plot_evolution
         plot_evolution(log_path, out_path=run_dir / "pred_dist_evolution.png")
     except Exception as e:
         print(f"[warn] Could not generate pred_dist_evolution plot: {e}")

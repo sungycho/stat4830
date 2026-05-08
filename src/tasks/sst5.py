@@ -18,7 +18,7 @@ _PATTERNS = [
 @register("sst5")
 class Sst5Task(Task):
     def load_data(self, train_size, val_size, seed):
-        ds = load_dataset("sst", "default")
+        ds = load_dataset("SetFit/sst5")
         train = ds["train"].shuffle(seed=seed).select(range(min(train_size, len(ds["train"]))))
         val_pool = ds["validation"]
         val = val_pool.shuffle(seed=seed).select(range(min(val_size, len(val_pool))))
@@ -46,19 +46,5 @@ class Sst5Task(Task):
 
 
 def _to_list(split):
-    # SST fine-grained: label is a float in [0,1]; bin into 5 classes
-    results = []
-    for ex in split:
-        score = float(ex["label"])
-        if score <= 0.2:
-            label = 0
-        elif score <= 0.4:
-            label = 1
-        elif score <= 0.6:
-            label = 2
-        elif score <= 0.8:
-            label = 3
-        else:
-            label = 4
-        results.append({"sentence": ex["sentence"], "label": label})
-    return results
+    # SetFit/sst5: label is already an integer 0-4; field is "text"
+    return [{"sentence": ex["text"], "label": int(ex["label"])} for ex in split]

@@ -170,7 +170,7 @@ BLOCKS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # CLI → train_es.py arg translation
 # ---------------------------------------------------------------------------
-_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize", "no_save": "--no-save", "no_chat_template": "--no-chat-template"}
+_BOOL_FLAGS = {"one_sided": "--one-sided", "no_normalize": "--no-normalize", "no_save": "--no-save", "no_chat_template": "--no-chat-template", "chat_template": "--chat-template"}
 _ARG_MAP = {
     "task":            "--task",
     "model":           "--model",
@@ -355,6 +355,16 @@ def parse_args():
                    help="Disable checkpoint saving for all runs (saves disk space)")
     p.add_argument("--no-chat-template", action="store_true", default=False,
                    help="Force skip chat template for all runs")
+    p.add_argument("--chat-template", action="store_true", default=False,
+                   help="Force apply chat template for all runs")
+    p.add_argument("--lr",           type=float, default=None,
+                   help="Override learning rate for all runs")
+    p.add_argument("--prompt-style", default=None,
+                   choices=["simple", "complex", "mezo", "free"],
+                   help="Override prompt style for all runs")
+    p.add_argument("--reward",       default=None,
+                   choices=["accuracy", "ce"],
+                   help="Override reward type for all runs")
     return p.parse_args()
 
 
@@ -396,6 +406,14 @@ def main() -> None:
         extra_base["sigma"] = args.best_sigma
     if args.best_lr is not None:
         extra_base["lr"] = args.best_lr
+    if args.lr is not None:
+        extra_base["lr"] = args.lr
+    if args.prompt_style is not None:
+        extra_base["prompt_style"] = args.prompt_style
+    if args.chat_template:
+        extra_base["chat_template"] = True
+    if args.reward is not None:
+        extra_base["reward"] = args.reward
     if args.best_sigma is not None or args.best_lr is not None:
         patch: dict = {}
         if args.best_sigma is not None:

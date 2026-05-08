@@ -1,23 +1,46 @@
 from __future__ import annotations
+import random
 import re
-from datasets import load_dataset
+import urllib.request
+from pathlib import Path
 from src.tasks import Task, register
 
-# TREC coarse labels (label-coarse field, 0-5)
 _LABELS = ["abbreviation", "entity", "description", "human", "location", "numeric"]
-
-# Build a regex per label that matches the first word
+_COARSE_MAP = {"ABBR": 0, "ENTY": 1, "DESC": 2, "HUM": 3, "LOC": 4, "NUM": 5}
 _PATTERNS = {label: re.compile(rf"\b{label}\b", re.IGNORECASE) for label in _LABELS}
+
+_TRAIN_URL = "https://cogcomp.seas.upenn.edu/Data/QA/QC/train_5500.label"
+_TEST_URL  = "https://cogcomp.seas.upenn.edu/Data/QA/QC/TREC_10.label"
+_CACHE_DIR = Path.home() / ".cache" / "stat4830_trec"
+
+
+def _fetch_trec(url: str, cache_path: Path) -> list[dict]:
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(url, cache_path)
+    examples = []
+    with open(cache_path, encoding="latin-1") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            label_part, _, text = line.partition(" ")
+            coarse = label_part.partition(":")[0]
+            label = _COARSE_MAP.get(coarse, -1)
+            if label >= 0:
+                examples.append({"text": text, "label": label})
+    return examples
 
 
 @register("trec")
 class TrecTask(Task):
     def load_data(self, train_size, val_size, seed):
-        ds = load_dataset("trec")
-        train = ds["train"].shuffle(seed=seed).select(range(min(train_size, len(ds["train"]))))
-        val_pool = ds["test"]  # TREC has no validation split; test set is small (500)
-        val = val_pool.shuffle(seed=seed).select(range(min(val_size, len(val_pool))))
-        return _to_list(train, "coarse_label"), _to_list(val, "coarse_label")
+        train_raw = _fetch_trec(_TRAIN_URL, _CACHE_DIR / "train.label")
+        test_raw  = _fetch_trec(_TEST_URL,  _CACHE_DIR / "test.label")
+        rng = random.Random(seed)
+        rng.shuffle(train_raw)
+        rng.shuffle(test_raw)
+        return train_raw[:min(train_size, len(train_raw))], test_raw[:min(val_size, len(test_raw))]
 
     def build_prompt(self, example):
         return (
@@ -28,7 +51,7 @@ class TrecTask(Task):
         )
 
     def label_words(self):
-        return _LABELS  # ["abbreviation", "entity", "description", "human", "location", "numeric"]
+        return _LABELS
 
     def score_ce(self, log_probs, example):
         correct = _LABELS[example["label"]]
@@ -46,7 +69,3 @@ class TrecTask(Task):
             return -1.0
         pred = _LABELS.index(first_match)
         return 1.0 if pred == example["label"] else -1.0
-
-
-def _to_list(split, label_field):
-    return [{"text": ex["text"], "label": ex[label_field]} for ex in split]

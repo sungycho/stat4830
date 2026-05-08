@@ -151,6 +151,23 @@ def _worker(rank: int, args_ns, probe_pool: list, work_items: list, result_queue
             flush=True,
         )
 
+    # Rank-0 computes p0 here while the model is still loaded — avoids a second
+    # model load in the main process (which would double peak GPU memory usage).
+    # Use the same batch_size as the probe loop to avoid OOM on long-generation tasks.
+    p0_val = None
+    if rank == 0:
+        print(f"\n[W0] estimating p0 over {len(probe_pool)} examples (reusing loaded model)...")
+        base_prompts = [prompt_cfg.prompt_fn(ex) for ex in probe_pool]
+        base_scores_p0: list[float] = []
+        bs = args_ns.batch_size
+        for i in range(0, len(probe_pool), bs):
+            _, chunk = eval_batch_scores(
+                backend, base_prompts[i:i+bs], probe_pool[i:i+bs], task, raw=raw
+            )
+            base_scores_p0.extend(chunk)
+        p0_val = sum(1.0 for s in base_scores_p0 if s > 0) / len(base_scores_p0)
+        print(f"[W0] p0 = {p0_val:.3f}", flush=True)
+
     result_queue.put({
         "rank":        rank,
         "k_indices":   [item[0] for item in work_items],
@@ -160,6 +177,7 @@ def _worker(rank: int, args_ns, probe_pool: list, work_items: list, result_queue
         "x_plus_all":  local_x_plus,
         "x_minus_all": local_x_minus,
         "n_degenerate": local_n_degen,
+        "p0":          p0_val,
     })
 
 
@@ -275,22 +293,35 @@ def run_probe(args):
             nmin = math.ceil(math.log(alpha_conf) / math.log(p_degenerate))
         nmin_table[alpha_conf] = nmin
 
-    # --- estimate base model accuracy p0 ---
-    print(f"\n[probe] estimating base model accuracy p0 over full probe_pool ({len(probe_pool)} examples)...")
-    backend_p0 = create_backend(
-        "hf",
-        model_name=args.model,
-        device=args.device,
-        dtype=dtype,
-        max_new_tokens=args.max_new_tokens,
-        do_sample=False,
+    # --- p0: taken from rank-0 worker (computed while model was still loaded) ---
+    # For num_workers>1 rank-0 runs in its own spawned process; its p0 is still valid
+    # because the 3-perturb trick always restores theta before the next pair.
+    p0_from_worker = next(
+        (r["p0"] for r in raw_results if r["rank"] == 0 and r.get("p0") is not None),
+        None,
     )
-    task_p0 = get_task(args.task)
-    prompt_cfg_p0 = resolve_prompt_config(task_p0, getattr(args, "prompt_style", "simple"))
-    raw_p0 = getattr(args, "no_chat_template", False) or prompt_cfg_p0.force_raw or task_p0.prefer_base_prompt
-    base_prompts = [prompt_cfg_p0.prompt_fn(ex) for ex in probe_pool]
-    _, base_scores = eval_batch_scores(backend_p0, base_prompts, probe_pool, task_p0, raw=raw_p0)
-    p0 = sum(1.0 for s in base_scores if s > 0) / len(base_scores)
+    if p0_from_worker is not None:
+        p0 = p0_from_worker
+    else:
+        # Fallback (should not happen in normal runs)
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        print(f"\n[probe] fallback: estimating p0 via second model load ({len(probe_pool)} examples)...")
+        backend_p0 = create_backend(
+            "hf",
+            model_name=args.model,
+            device=args.device,
+            dtype=dtype,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=False,
+        )
+        task_p0 = get_task(args.task)
+        prompt_cfg_p0 = resolve_prompt_config(task_p0, getattr(args, "prompt_style", "simple"))
+        raw_p0 = getattr(args, "no_chat_template", False) or prompt_cfg_p0.force_raw or task_p0.prefer_base_prompt
+        base_prompts = [prompt_cfg_p0.prompt_fn(ex) for ex in probe_pool]
+        _, base_scores = eval_batch_scores(backend_p0, base_prompts, probe_pool, task_p0, raw=raw_p0)
+        p0 = sum(1.0 for s in base_scores if s > 0) / len(base_scores)
 
     # --- rho: batch-level ---
     n_k       = len(r_plus_list)

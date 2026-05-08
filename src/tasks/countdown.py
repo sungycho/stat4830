@@ -106,24 +106,51 @@ class CountdownTask(Task):
         return True
 
     def load_data(self, train_size: int, val_size: int, seed: int):
-        # Dataset has 2200 examples. Paper uses 200 train / 2000 val.
-        with open(_DATA_PATH) as f:
-            data = json.load(f)
-        total = train_size + val_size
-        if total > len(data):
-            raise ValueError(
-                f"Requested {total} examples but countdown.json only has {len(data)}."
-            )
-        # Normalize field name: 'numbers' → 'nums'
-        def _norm(item: dict) -> dict:
-            return {
-                "nums":     item["numbers"],
-                "target":   float(item["target"]),
-                "context":  item["context"],
-                "solution": item.get("solution", ""),
-            }
-        train = [_norm(data[i]) for i in range(train_size)]
-        val   = [_norm(data[i]) for i in range(train_size, train_size + val_size)]
+        if _DATA_PATH.exists():
+            # Local JSON: 2200 examples from the ES-at-Scale paper
+            with open(_DATA_PATH) as f:
+                data = json.load(f)
+            total = train_size + val_size
+            if total > len(data):
+                raise ValueError(
+                    f"Requested {total} examples but countdown.json only has {len(data)}."
+                )
+            def _norm(item: dict) -> dict:
+                return {
+                    "nums":     item["numbers"],
+                    "target":   float(item["target"]),
+                    "context":  item["context"],
+                    "solution": item.get("solution", ""),
+                }
+            train = [_norm(data[i]) for i in range(train_size)]
+            val   = [_norm(data[i]) for i in range(train_size, train_size + val_size)]
+        else:
+            # Fallback: HuggingFace dataset (Jiayi-Pan/Countdown-Tasks-3to4)
+            import random as _rand
+            from datasets import load_dataset as _hf_load
+            hf = _hf_load("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
+            pool = list(hf)
+            _rand.Random(seed).shuffle(pool)
+
+            def _from_hf(item: dict) -> dict:
+                nums   = item["nums"]
+                target = int(item["target"])
+                nums_str = " ".join(str(n) for n in nums)
+                context = (
+                    f"Using the numbers {nums_str}, create an equation that equals {target}. "
+                    f"You can use basic arithmetic operations (+, -, *, /) and each number can "
+                    f"only be used once. Show your work in <think> </think> tags. And return the "
+                    f"final answer in <answer> </answer> tags, for example "
+                    f"<answer> (1 + 2) / 3 </answer>.\n<think>"
+                )
+                return {"nums": nums, "target": float(target), "context": context, "solution": ""}
+
+            avail     = len(pool)
+            n_train   = min(train_size, avail)
+            n_val     = min(val_size, avail - n_train)
+            train = [_from_hf(pool[i]) for i in range(n_train)]
+            val   = [_from_hf(pool[i]) for i in range(n_train, n_train + n_val)]
+
         return train, val
 
     def build_prompt_base(self, example: dict) -> str:
