@@ -32,6 +32,19 @@ class Sst5Task(Task):
             f"Sentiment:"
         )
 
+    def predict(self, text: str) -> str | None:
+        first_label = None
+        first_pos = len(text) + 1
+        for label_id, pat in _PATTERNS:
+            m = pat.search(text)
+            if m and m.start() < first_pos:
+                first_label = _LABELS[label_id]
+                first_pos = m.start()
+        return first_label
+
+    def gold_label(self, example: dict) -> str:
+        return _LABELS[example["label"]]
+
     def score(self, text, example):
         first_label = None
         first_pos = len(text) + 1

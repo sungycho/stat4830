@@ -283,3 +283,7 @@ docs/theory_es_scaling.md
 docs/draft-v2.tex
 
 docs/neurips-format
+
+.writeup/
+
+!.final-deliverable/*

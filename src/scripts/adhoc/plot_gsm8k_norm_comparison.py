@@ -48,7 +48,7 @@ NORM_OFF_LOGS = [
 ]
 
 NORM_ON_LOGS = [
-    "results/gsm8k_n2_20260414_010958/log.jsonl",  # seed 42 (short, up to 6400)
+    "results/gsm8k_n2_norm_on_s42/log.jsonl",       # seed 42
     "results/gsm8k_n2_norm_on_s43/log.jsonl",       # seed 43
     "results/gsm8k_n2_norm_on_s44/log.jsonl",       # seed 44
 ]
@@ -88,11 +88,11 @@ def main() -> None:
     grid = np.linspace(0, GRID_MAX, N_PTS)
 
     conditions = [
-        ("normalize=off (3 seeds)", NORM_OFF_LOGS, "tomato"),
-        ("normalize=on (3 seeds)",  NORM_ON_LOGS,  "steelblue"),
+        ("normalize=off (3 seeds)", NORM_OFF_LOGS, "#1f77b4"),
+        ("normalize=on (3 seeds)",  NORM_ON_LOGS,  "#ff7f0e"),
     ]
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     for label, logs, color in conditions:
         mean, std = average_seeds(logs, grid)

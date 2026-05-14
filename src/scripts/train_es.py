@@ -180,8 +180,8 @@ def parse_args():
                    help="ARS-style: keep only top-k seeds by |advantage| before update (0=all)")
     # prompt style
     p.add_argument("--prompt-style", default="simple", choices=PROMPT_STYLES,
-                   help="Prompt template style. 'simple': few-shot completion (build_prompt_base). "
-                        "'complex': instruction format (build_prompt). "
+                   help="Prompt template style. 'simple': zero-shot instruction (build_prompt). "
+                        "'complex': few-shot completion with in-context examples (build_prompt_base). "
                         "'mezo': MeZO paper templates (2305.17333, Table 14), always raw. "
                         "'free': bare input, no examples or instructions.")
     p.add_argument("--chat-template", dest="chat_template", action="store_true", default=None,

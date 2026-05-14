@@ -65,6 +65,13 @@ class CopaTask(Task):
     def gold_label(self, example: dict) -> str:
         return "1" if example["label"] == 0 else "2"
 
+    def label_words(self):
+        return ["1", "2"]
+
+    def score_ce(self, log_probs, example):
+        correct = "1" if example["label"] == 0 else "2"
+        return log_probs[correct]
+
     def score(self, text, example):
         one = _ONE.search(text)
         two = _TWO.search(text)

@@ -57,6 +57,19 @@ class TrecTask(Task):
         correct = _LABELS[example["label"]]
         return log_probs[correct]
 
+    def predict(self, text: str) -> str | None:
+        first_match = None
+        first_pos = len(text) + 1
+        for label, pat in _PATTERNS.items():
+            m = pat.search(text)
+            if m and m.start() < first_pos:
+                first_match = label
+                first_pos = m.start()
+        return first_match
+
+    def gold_label(self, example: dict) -> str:
+        return _LABELS[example["label"]]
+
     def score(self, text, example):
         first_match = None
         first_pos = len(text) + 1

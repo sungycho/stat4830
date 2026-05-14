@@ -114,11 +114,14 @@ def average_seeds(seed_runs: list[list[str]], grid: np.ndarray) -> tuple[np.ndar
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--out", default="results/pop_scaling_3seeds.png")
+    p.add_argument("--figsize", default="11,5",
+                   help="comma-separated WxH in inches (default 11,5)")
     args = p.parse_args()
 
     grid = np.linspace(0, GRID_MAX, N_PTS)
 
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fw, fh = (float(x) for x in args.figsize.split(","))
+    fig, ax = plt.subplots(figsize=(fw, fh))
 
     for n, seed_runs in sorted(RUNS.items()):
         mean, std = average_seeds(seed_runs, grid)
